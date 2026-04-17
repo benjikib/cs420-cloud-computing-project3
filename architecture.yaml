@@ -273,10 +273,9 @@ Resources:
           cat >> /opt/commie/.env << ENVVARS
           JWT_SECRET=${JwtSecret}
           AWS_REGION=${AWS::Region}
+          CORS_ORIGIN=*
           DYNAMODB_USERS_TABLE=${AWS::StackName}-users
-          DYNAMODB_ORGANIZATIONS_TABLE=${AWS::StackName}-organizations
           DYNAMODB_COMMITTEES_TABLE=${AWS::StackName}-committees
-          DYNAMODB_MOTIONS_TABLE=${AWS::StackName}-motions
           DYNAMODB_VOTES_TABLE=${AWS::StackName}-votes
           DYNAMODB_COMMENTS_TABLE=${AWS::StackName}-comments
           DYNAMODB_NOTIFICATIONS_TABLE=${AWS::StackName}-notifications
@@ -360,7 +359,7 @@ Resources:
 
               # Proxy API calls to the backend Express server
               location /api/ {
-                  proxy_pass http://BACKEND_PRIVATE_IP:3001/;
+                  proxy_pass http://BACKEND_PRIVATE_IP:3001;
                   proxy_http_version 1.1;
                   proxy_set_header Host ${!host};
                   proxy_set_header X-Real-IP ${!remote_addr};
