@@ -1,7 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Comment = require('../models/Comment');
-const Motion = require('../models/Motion');
 const Committee = require('../models/Committee');
 const { authenticate } = require('../middleware/auth');
 
@@ -17,31 +16,21 @@ router.get('/committee/:id/motion/:motionId/comments/:page', authenticate, async
     const page = parseInt(req.params.page) || 1;
     const limit = 20;
 
-    // Resolve committee and verify motion exists
     const committee = await Committee.findByIdOrSlug(req.params.id);
     if (!committee) {
       return res.status(404).json({ success: false, message: 'Committee not found' });
     }
-    const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
     if (!motion) {
-      return res.status(404).json({
-        success: false,
-        message: 'Motion not found'
-      });
+      return res.status(404).json({ success: false, message: 'Motion not found' });
     }
 
     const result = await Comment.findByMotion(req.params.motionId, page, limit);
 
-    res.json({
-      success: true,
-      ...result
-    });
+    res.json({ success: true, ...result });
   } catch (error) {
     console.error('Get comments error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error fetching comments'
-    });
+    res.status(500).json({ success: false, message: 'Server error fetching comments' });
   }
 });
 
@@ -58,67 +47,46 @@ router.post('/committee/:id/motion/:motionId/comment/create',
   ],
   async (req, res) => {
     try {
-      // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          errors: errors.array()
-        });
+        return res.status(400).json({ success: false, errors: errors.array() });
       }
 
-      // Resolve committee and verify motion exists
       const committee = await Committee.findByIdOrSlug(req.params.id);
       if (!committee) {
         return res.status(404).json({ success: false, message: 'Committee not found' });
       }
-      const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+      const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
       if (!motion) {
-        return res.status(404).json({
-          success: false,
-          message: 'Motion not found'
-        });
+        return res.status(404).json({ success: false, message: 'Motion not found' });
       }
 
-      // Verify user is member of committee
-      // Use getMemberRole for accurate role detection
-      const role = await Committee.getMemberRole(committee._id, req.user.userId);
+      const role = await Committee.getMemberRole(committee.committeeId, req.user.userId);
       if (!role || role === 'guest') {
-        return res.status(403).json({
-          success: false,
-          message: 'You must be a member of this committee to comment'
-        });
+        return res.status(403).json({ success: false, message: 'You must be a member of this committee to comment' });
       }
 
       const { content, stance } = req.body;
 
-      // Create comment - use committee._id (already resolved ObjectId) instead of req.params.id (which could be a slug)
       const comment = await Comment.create({
         motionId: req.params.motionId,
-        committeeId: committee._id.toString(),
+        committeeId: committee.committeeId,
         author: req.user.userId,
         content,
         stance: stance || 'neutral'
       });
 
-      res.status(201).json({
-        success: true,
-        message: 'Comment created successfully',
-        comment
-      });
+      res.status(201).json({ success: true, message: 'Comment created successfully', comment });
     } catch (error) {
       console.error('Create comment error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error creating comment'
-      });
+      res.status(500).json({ success: false, message: 'Server error creating comment' });
     }
   }
 );
 
 /**
  * @route   PUT /committee/:id/motion/:motionId/comment/:commentId
- * @desc    Update a comment
+ * @desc    Update a comment (author only)
  * @access  Private
  */
 router.put('/committee/:id/motion/:motionId/comment/:commentId',
@@ -129,30 +97,18 @@ router.put('/committee/:id/motion/:motionId/comment/:commentId',
   ],
   async (req, res) => {
     try {
-      // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          errors: errors.array()
-        });
+        return res.status(400).json({ success: false, errors: errors.array() });
       }
 
       const comment = await Comment.findById(req.params.commentId);
-
       if (!comment) {
-        return res.status(404).json({
-          success: false,
-          message: 'Comment not found'
-        });
+        return res.status(404).json({ success: false, message: 'Comment not found' });
       }
 
-      // Only comment author can update comment
       if (comment.author !== req.user.userId) {
-        return res.status(403).json({
-          success: false,
-          message: 'Not authorized to update this comment'
-        });
+        return res.status(403).json({ success: false, message: 'Not authorized to update this comment' });
       }
 
       const updates = {};
@@ -161,58 +117,37 @@ router.put('/committee/:id/motion/:motionId/comment/:commentId',
 
       const updatedComment = await Comment.updateById(req.params.commentId, updates);
 
-      res.json({
-        success: true,
-        message: 'Comment updated successfully',
-        comment: updatedComment
-      });
+      res.json({ success: true, message: 'Comment updated successfully', comment: updatedComment });
     } catch (error) {
       console.error('Update comment error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error updating comment'
-      });
+      res.status(500).json({ success: false, message: 'Server error updating comment' });
     }
   }
 );
 
 /**
  * @route   DELETE /committee/:id/motion/:motionId/comment/:commentId
- * @desc    Delete a comment
+ * @desc    Delete a comment (author or chair)
  * @access  Private
  */
 router.delete('/committee/:id/motion/:motionId/comment/:commentId', authenticate, async (req, res) => {
   try {
     const comment = await Comment.findById(req.params.commentId);
-
     if (!comment) {
-      return res.status(404).json({
-        success: false,
-        message: 'Comment not found'
-      });
+      return res.status(404).json({ success: false, message: 'Comment not found' });
     }
 
-    // Only comment author or committee chair can delete comment
-    const committee = await Committee.findById(req.params.id);
-    if (comment.author !== req.user.userId && committee.chair !== req.user.userId) {
-      return res.status(403).json({
-        success: false,
-        message: 'Not authorized to delete this comment'
-      });
+    const committee = await Committee.findByIdOrSlug(req.params.id);
+    if (comment.author !== req.user.userId && committee?.chair !== req.user.userId) {
+      return res.status(403).json({ success: false, message: 'Not authorized to delete this comment' });
     }
 
     await Comment.deleteById(req.params.commentId);
 
-    res.json({
-      success: true,
-      message: 'Comment deleted successfully'
-    });
+    res.json({ success: true, message: 'Comment deleted successfully' });
   } catch (error) {
     console.error('Delete comment error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error deleting comment'
-    });
+    res.status(500).json({ success: false, message: 'Server error deleting comment' });
   }
 });
 

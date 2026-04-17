@@ -37,7 +37,7 @@ function MotionDetails() {
                 const motionObj = data.motion || data;
                 setMotion(motionObj);
                 // If the motion is a subsidiary of another motion, fetch parent motion for display
-                const parentId = motionObj.targetMotionId || motionObj.targetMotionId?._id || motionObj.amendTargetMotionId || motionObj.amendTargetMotionId?._id;
+                const parentId = motionObj.targetMotionId || motionObj.amendTargetMotionId;
                 if (parentId) {
                     try {
                         const pm = await getMotionById(committeeId, String(parentId));
@@ -58,7 +58,7 @@ function MotionDetails() {
                         return;
                     }
                     setCurrentUserState(user);
-                    const userId = user && (String(user.id || user._id || user._id || user._id));
+                    const userId = user && (String(user.id || user.userId));
                     const userRoles = user && user.roles ? user.roles : [];
                     const adminFlag = isAdmin(user);
                     setIsAdminUser(Boolean(adminFlag));
@@ -83,7 +83,7 @@ function MotionDetails() {
                             const membersList = (membersRes && membersRes.members) || [];
                             let memberFound = userId && membersList.some(m => {
                                 if (!m) return false;
-                                const mid = m._id || m.id || m.userId || m;
+                                const mid = m.userId || m.id || m;
                                 return String(mid) === userId;
                             });
                             // If no match found in members list, fall back to user.memberCommittees
@@ -96,7 +96,7 @@ function MotionDetails() {
                             // determine guest status from user object if present
                             let guestFlag = false;
                             if (user && Array.isArray(user.guestCommittees)) {
-                                guestFlag = user.guestCommittees.some(g => String(g) === String(committeeId) || String(g?._id) === String(committeeId));
+                                guestFlag = user.guestCommittees.some(g => String(g) === String(committeeId));
                             }
                             // Also allow guest determination from user.guestCommittees with legacy _id fields
                             if (!guestFlag && user && Array.isArray(user.guestCommittees)) {
@@ -194,7 +194,7 @@ function MotionDetails() {
     }, [committeeId, motionId, motion, canVote]);
     
     // Extract current user ID - check all possible formats
-    const currentUserId = currentUserState?._id || currentUserState?.id || currentUserState?.userId;
+    const currentUserId = currentUserState?.id || currentUserState?.userId;
     const isAuthor = motion && currentUserId && (String(motion.author) === String(currentUserId));
     
     const [isDeleting, setIsDeleting] = useState(false);
@@ -627,7 +627,7 @@ function MotionDetails() {
                     {parentMotion && (
                         <div className="flex items-center gap-2 mt-2 text-sm">
                             <span className="text-xs mr-1 text-gray-600 dark:text-gray-400">Parent Motion:</span>
-                            <button className="text-sm text-darker-green dark:text-lighter-green hover:underline" onClick={() => navigate(`/committee/${committeeId}/motion/${parentMotion._id || parentMotion.id}`, { state: { background: location } })}>
+                            <button className="text-sm text-darker-green dark:text-lighter-green hover:underline" onClick={() => navigate(`/committee/${committeeId}/motion/${parentMotion.motionId || parentMotion.id}`, { state: { background: location } })}>
                                 {parentMotion.title}
                             </button>
                         </div>
@@ -895,17 +895,17 @@ function MotionDetails() {
                                     <div className="space-y-3">
                                         {subsidiaryMotions.map(sm => (
                                             <button
-                                                key={sm._id || sm.id}
+                                                key={sm.motionId || sm.id}
                                                 className="block text-left p-4 bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 h-[120px] hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
                                                 style={{ width: '100%' }}
-                                                onClick={() => navigate(`/committee/${committeeId}/motion/${sm._id || sm.id}`, { state: { background: location } })}
+                                                onClick={() => navigate(`/committee/${committeeId}/motion/${sm.motionId || sm.id}`, { state: { background: location } })}
                                             >
                                                 <div className="flex justify-between items-start gap-2 h-full">
                                                     <div className="flex-1 min-w-0 flex flex-col justify-center">
                                                         <div className="font-semibold text-gray-800 dark:text-gray-200 truncate">{sm.title}</div>
                                                         <div className="text-sm text-gray-600 dark:text-gray-400 mt-1 line-clamp-2">{sm.description}</div>
                                                     </div>
-                                                    <div className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">#{(sm._id || sm.id).toString().slice(0, 6)}</div>
+                                                    <div className="text-xs text-gray-500 dark:text-gray-400 flex-shrink-0 ml-2">#{(sm.motionId || sm.id).toString().slice(0, 6)}</div>
                                                 </div>
                                             </button>
                                         ))}

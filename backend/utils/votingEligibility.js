@@ -58,29 +58,11 @@ async function checkVotingEligibility(motion, committeeSettings, committeeId) {
     // Check minimum speakers requirement
     if (committeeSettings.minSpeakersBeforeVote > 0) {
         try {
-            const { ObjectId } = require('mongodb');
-            const comments = await Comment.collection()
-                .find({ 
-                    motionId: ObjectId.isValid(motion._id) ? new ObjectId(motion._id) : motion._id,
-                    isSystemMessage: { $ne: true }
-                })
-                .toArray();
-            
-            // Get unique authors (excluding motion author and system messages)
-            // motion.author might be an ObjectId object with _id, or just a string/ObjectId
-            let motionAuthorStr = null;
-            if (motion.author) {
-                if (motion.author._id) {
-                    // It's an ObjectId object
-                    motionAuthorStr = String(motion.author._id);
-                } else if (ObjectId.isValid(motion.author)) {
-                    // It's an ObjectId
-                    motionAuthorStr = String(new ObjectId(motion.author));
-                } else {
-                    // It's a string
-                    motionAuthorStr = String(motion.author);
-                }
-            }
+            const result = await Comment.findByMotion(motion.motionId || motion._id?.toString(), 1, 1000);
+            const comments = (result.comments || []).filter(c => !c.isSystemMessage);
+
+            // Get unique authors
+            let motionAuthorStr = motion.author ? String(motion.author) : null;
             
             const uniqueSpeakers = new Set();
             
@@ -132,13 +114,8 @@ async function checkVotingEligibility(motion, committeeSettings, committeeId) {
     // Check Pro/Con balance requirement
     if (committeeSettings.requireProConBalance) {
         try {
-            const { ObjectId } = require('mongodb');
-            const comments = await Comment.collection()
-                .find({ 
-                    motionId: ObjectId.isValid(motion._id) ? new ObjectId(motion._id) : motion._id,
-                    isSystemMessage: { $ne: true }
-                })
-                .toArray();
+            const result = await Comment.findByMotion(motion.motionId || motion._id?.toString(), 1, 1000);
+            const comments = (result.comments || []).filter(c => !c.isSystemMessage);
             
             const hasProComment = comments.some(c => c.stance === 'pro');
             const hasConComment = comments.some(c => c.stance === 'con');
@@ -211,19 +188,22 @@ async function closeExpiredVoting(motion, committee, updateMotionFn, createComme
     }
 
     // Voting period has expired - close voting and fail the motion
-    await updateMotionFn(committee._id, motion._id.toString(), {
+    const committeeId = committee.committeeId || committee._id?.toString();
+    const motionId = motion.motionId || motion._id?.toString();
+
+    await updateMotionFn(committeeId, motionId, {
         status: 'failed',
         votingStatus: 'closed',
-        votingClosedAt: new Date()
+        votingClosedAt: new Date().toISOString()
     });
 
     // Create system message
     const totalVotes = motion.votes.yes + motion.votes.no + motion.votes.abstain;
     const totalMembers = committee.members ? committee.members.length : 0;
-    
+
     await createCommentFn({
-        motionId: motion._id.toString(),
-        committeeId: committee._id.toString(),
+        motionId,
+        committeeId,
         author: null,
         content: `❌ Voting period expired. Motion failed - quorum/participation requirements not met (${totalVotes}/${totalMembers} members voted)`,
         stance: 'neutral',
@@ -231,7 +211,7 @@ async function closeExpiredVoting(motion, committee, updateMotionFn, createComme
         messageType: 'voting-expired'
     });
 
-    console.log(`Voting expired for motion ${motion._id} - marked as failed`);
+    console.log(`Voting expired for motion ${motionId} - marked as failed`);
     return true;
 }
 

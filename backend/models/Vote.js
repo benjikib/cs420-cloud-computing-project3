@@ -1,111 +1,108 @@
-const { ObjectId } = require('mongodb');
-const { getDB } = require('../config/database');
+const {
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+  ScanCommand,
+  QueryCommand,
+} = require('@aws-sdk/lib-dynamodb');
+const { getDynamo } = require('../config/database');
+
+const TABLE = process.env.DYNAMODB_VOTES_TABLE || 'commie-votes';
+
+// DynamoDB table key design:
+//   PK: motionId (string)
+//   SK: userId (string)
+// This composite key allows direct lookup of a user's vote on a motion,
+// and querying all votes for a motion via Query on PK alone.
 
 class Vote {
-  static collection() {
-    return getDB().collection('votes');
-  }
-
-  static toObjectId(value) {
-    // Return null if value cannot be converted
-    if (!value && value !== 0) return null;
-    try {
-      if (value && typeof value === 'object' && value._bsontype === 'ObjectID') return value;
-      if (ObjectId.isValid(value)) return new ObjectId(value);
-      return null;
-    } catch (err) {
-      return null;
-    }
+  static dynamo() {
+    return getDynamo();
   }
 
   static async create(voteData) {
-    // Defensive casting: accept string or ObjectId
-    const motionObjId = this.toObjectId(voteData.motionId);
-    const committeeObjId = this.toObjectId(voteData.committeeId);
-
-    if (!motionObjId) {
-      throw new Error(`Invalid motionId provided to Vote.create: ${JSON.stringify(voteData.motionId)}`);
-    }
-    if (!committeeObjId) {
-      throw new Error(`Invalid committeeId provided to Vote.create: ${JSON.stringify(voteData.committeeId)}`);
-    }
-
-    const vote = {
-      motionId: motionObjId,
-      committeeId: committeeObjId,
-      userId: voteData.userId,
-      vote: voteData.vote, // 'yes', 'no', 'abstain'
+    const now = new Date().toISOString();
+    const item = {
+      motionId: String(voteData.motionId),
+      userId: String(voteData.userId),
+      committeeId: voteData.committeeId ? String(voteData.committeeId) : null,
+      vote: voteData.vote,
       isAnonymous: voteData.isAnonymous || false,
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: now,
+      updatedAt: now,
     };
 
-    const result = await this.collection().insertOne(vote);
-    return { _id: result.insertedId, ...vote };
+    await this.dynamo().send(new PutCommand({
+      TableName: TABLE,
+      Item: item,
+    }));
+
+    return item;
   }
 
   static async findByMotion(motionId) {
-    const mid = this.toObjectId(motionId);
-    if (!mid) return [];
-    return await this.collection()
-      .find({ motionId: mid })
-      .toArray();
+    const result = await this.dynamo().send(new QueryCommand({
+      TableName: TABLE,
+      KeyConditionExpression: 'motionId = :mid',
+      ExpressionAttributeValues: { ':mid': String(motionId) },
+    }));
+    return result.Items || [];
   }
 
   static async findByUserAndMotion(userId, motionId) {
-    const mid = this.toObjectId(motionId);
-    if (!mid) return null;
-    return await this.collection().findOne({
-      userId,
-      motionId: mid
-    });
+    const result = await this.dynamo().send(new GetCommand({
+      TableName: TABLE,
+      Key: { motionId: String(motionId), userId: String(userId) },
+    }));
+    return result.Item || null;
   }
 
   static async updateOrCreate(userId, motionId, committeeId, voteValue, isAnonymous = false) {
-    const existingVote = await this.findByUserAndMotion(userId, motionId);
+    const now = new Date().toISOString();
 
-    if (existingVote) {
-      // Update existing vote
-      const result = await this.collection().findOneAndUpdate(
-        { _id: existingVote._id },
-        {
-          $set: {
-            vote: voteValue,
-            isAnonymous,
-            updatedAt: new Date()
-          }
-        },
-        { returnDocument: 'after' }
-      );
-      // Normalize to consistently return the document
-      return result.value;
-    } else {
-      // Create new vote
-      const newVote = await this.create({
-        motionId,
-        committeeId,
-        userId,
-        vote: voteValue,
-        isAnonymous
-      });
-      return newVote;
-    }
+    // Upsert via UpdateCommand — creates or overwrites the item
+    const result = await this.dynamo().send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { motionId: String(motionId), userId: String(userId) },
+      UpdateExpression: 'SET #vote = :vote, isAnonymous = :anon, committeeId = :cid, updatedAt = :now, createdAt = if_not_exists(createdAt, :now)',
+      ExpressionAttributeNames: { '#vote': 'vote' },
+      ExpressionAttributeValues: {
+        ':vote': voteValue,
+        ':anon': isAnonymous,
+        ':cid': committeeId ? String(committeeId) : null,
+        ':now': now,
+      },
+      ReturnValues: 'ALL_NEW',
+    }));
+
+    return result.Attributes || null;
   }
 
   static async deleteByUserAndMotion(userId, motionId) {
-    const mid = this.toObjectId(motionId);
-    if (!mid) return { deletedCount: 0 };
-    return await this.collection().deleteOne({
-      userId,
-      motionId: mid
-    });
+    await this.dynamo().send(new DeleteCommand({
+      TableName: TABLE,
+      Key: { motionId: String(motionId), userId: String(userId) },
+    }));
+    return { deletedCount: 1 };
+  }
+
+  static async deleteByMotion(motionId) {
+    const votes = await this.findByMotion(motionId);
+    await Promise.all(votes.map(v =>
+      this.dynamo().send(new DeleteCommand({
+        TableName: TABLE,
+        Key: { motionId: String(motionId), userId: String(v.userId) },
+      }))
+    ));
+    return { deletedCount: votes.length };
   }
 
   static async getVoteSummary(motionId) {
     const votes = await this.findByMotion(motionId);
 
-    const summary = votes.reduce((acc, vote) => {
-      acc[vote.vote] = (acc[vote.vote] || 0) + 1;
+    const summary = votes.reduce((acc, v) => {
+      acc[v.vote] = (acc[v.vote] || 0) + 1;
       acc.total += 1;
       return acc;
     }, { yes: 0, no: 0, abstain: 0, total: 0 });

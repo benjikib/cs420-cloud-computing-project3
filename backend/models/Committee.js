@@ -1,208 +1,193 @@
-const { ObjectId } = require('mongodb');
-const { getDB } = require('../config/database');
+const {
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+  ScanCommand,
+} = require('@aws-sdk/lib-dynamodb');
+const { randomUUID } = require('crypto');
+const { getDynamo } = require('../config/database');
 const { slugify } = require('../utils/slugify');
 
+const TABLE = process.env.DYNAMODB_COMMITTEES_TABLE || 'commie-committees';
+
 class Committee {
-  static collection() {
-    return getDB().collection('committees');
+  static dynamo() {
+    return getDynamo();
   }
 
   static normalizeMembers(members) {
-    // members can be array of ids or array of objects, normalize to objects
     if (!Array.isArray(members)) return [];
     return members.map(m => {
       if (!m) return null;
-      if (typeof m === 'string' || ObjectId.isValid(m)) {
-        return { userId: m, role: 'member', joinedAt: new Date() };
+      if (typeof m === 'string') {
+        return { userId: m, role: 'member', joinedAt: new Date().toISOString() };
       }
-      // obj may be {_id, id, userId, role }
-      const userId = m.userId || m._id || m.id || m._id;
-      return { userId, role: m.role || 'member', joinedAt: m.joinedAt || new Date() };
+      const userId = m.userId || m._id || m.id;
+      return { userId: String(userId), role: m.role || 'member', joinedAt: m.joinedAt || new Date().toISOString() };
     }).filter(Boolean);
   }
 
   static async create(committeeData) {
-    const slug = committeeData.slug || slugify(committeeData.title);
+    const committeeId = randomUUID();
+    const now = new Date().toISOString();
 
     const committee = {
+      committeeId,
       title: committeeData.title,
-      slug: slug,
+      slug: committeeData.slug || slugify(committeeData.title),
       description: committeeData.description,
       members: this.normalizeMembers(committeeData.members || []),
-      owner: committeeData.owner || null, // User ID of the owner (optional for now)
-      chair: committeeData.chair || null, // User ID of the chair
-      organizationId: committeeData.organizationId || null, // Organization this committee belongs to
+      owner: committeeData.owner || null,
+      chair: committeeData.chair ? String(committeeData.chair) : null,
       settings: committeeData.settings || {},
-      motions: [], // Array of embedded motion documents
-      createdAt: new Date(),
-      updatedAt: new Date()
+      motions: [],
+      createdAt: now,
+      updatedAt: now,
     };
 
-    const result = await this.collection().insertOne(committee);
-    return { _id: result.insertedId, ...committee };
-  }
-
-  static async findAll(page = 1, limit = 10) {
-    const skip = (page - 1) * limit;
-    const committees = await this.collection()
-      .find({})
-      .skip(skip)
-      .limit(limit)
-      .toArray();
-
-    const total = await this.collection().countDocuments();
-
-    return {
-      committees,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      total
-    };
-  }
-
-  static async findById(id) {
-    return await this.collection().findOne({ _id: new ObjectId(id) });
-  }
-
-  static async findBySlug(slug) {
-    return await this.collection().findOne({ slug: slug });
-  }
-
-  static async findByIdOrSlug(identifier) {
-    // Try to find by slug first
-    let committee = await this.findBySlug(identifier);
-
-    // If not found and identifier looks like an ObjectId, try finding by ID
-    if (!committee && ObjectId.isValid(identifier)) {
-      committee = await this.findById(identifier);
-    }
+    await this.dynamo().send(new PutCommand({
+      TableName: TABLE,
+      Item: committee,
+      ConditionExpression: 'attribute_not_exists(committeeId)',
+    }));
 
     return committee;
   }
 
-  static async findByMember(userId, page = 1, limit = 10) {
-    const skip = (page - 1) * limit;
-    // Support both legacy members array and role-aware object members
-    const uid = ObjectId.isValid(userId) ? new ObjectId(userId) : userId;
-    const query = { $or: [ { members: uid }, { 'members.userId': uid } ] };
-    const committees = await this.collection()
-      .find(query)
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+  static async findById(id) {
+    if (!id) return null;
+    const result = await this.dynamo().send(new GetCommand({
+      TableName: TABLE,
+      Key: { committeeId: String(id) },
+    }));
+    return result.Item || null;
+  }
 
-    const total = await this.collection().countDocuments({ $or: [ { members: userId }, { 'members.userId': userId } ] });
+  static async findBySlug(slug) {
+    const result = await this.dynamo().send(new ScanCommand({
+      TableName: TABLE,
+      FilterExpression: '#slug = :slug',
+      ExpressionAttributeNames: { '#slug': 'slug' },
+      ExpressionAttributeValues: { ':slug': slug },
+      Limit: 1,
+    }));
+    return result.Items?.[0] || null;
+  }
 
-    return {
-      committees,
-      page,
-      limit,
-      totalPages: Math.ceil(total / limit),
-      total
-    };
+  // Try UUID lookup first, then fall back to slug scan
+  static async findByIdOrSlug(identifier) {
+    if (!identifier) return null;
+
+    // Looks like a UUID — try direct GetItem first
+    const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (uuidPattern.test(identifier)) {
+      const byId = await this.findById(identifier);
+      if (byId) return byId;
+    }
+
+    // Fall back to slug scan
+    return this.findBySlug(identifier);
+  }
+
+  static async findAll() {
+    const result = await this.dynamo().send(new ScanCommand({ TableName: TABLE }));
+    return result.Items || [];
+  }
+
+  static async findByChair(userId) {
+    const result = await this.dynamo().send(new ScanCommand({
+      TableName: TABLE,
+      FilterExpression: '#chair = :userId',
+      ExpressionAttributeNames: { '#chair': 'chair' },
+      ExpressionAttributeValues: { ':userId': String(userId) },
+    }));
+    return result.Items || [];
   }
 
   static async updateById(id, updates) {
-    const updateData = {
-      ...updates,
-      updatedAt: new Date()
-    };
+    const now = new Date().toISOString();
 
-    // If title is being updated, regenerate the slug
+    // Regenerate slug if title changed
     if (updates.title) {
-      updateData.slug = slugify(updates.title);
+      updates.slug = slugify(updates.title);
     }
 
-    const result = await this.collection().findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
+    const fields = { ...updates, updatedAt: now };
+    const exprParts = [];
+    const exprNames = {};
+    const exprValues = {};
 
-    return result;
+    for (const [key, val] of Object.entries(fields)) {
+      exprParts.push(`#${key} = :${key}`);
+      exprNames[`#${key}`] = key;
+      exprValues[`:${key}`] = val;
+    }
+
+    const result = await this.dynamo().send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { committeeId: String(id) },
+      UpdateExpression: `SET ${exprParts.join(', ')}`,
+      ExpressionAttributeNames: exprNames,
+      ExpressionAttributeValues: exprValues,
+      ReturnValues: 'ALL_NEW',
+    }));
+
+    return result.Attributes || null;
   }
 
   static async deleteById(id) {
-    return await this.collection().deleteOne({ _id: new ObjectId(id) });
+    return this.dynamo().send(new DeleteCommand({
+      TableName: TABLE,
+      Key: { committeeId: String(id) },
+    }));
   }
 
+  // ── Member management ──────────────────────────────────────────────────────
+
   static async addMember(committeeId, userId) {
-    // legacy compatibility: still add to user-friendly array if callers expect it
-    const uid = ObjectId.isValid(userId) ? new ObjectId(userId) : userId;
-    const newMember = { userId: uid, role: 'member', joinedAt: new Date() };
-    // Remove existing entry for the userId if present, then push new object
-    await this.collection().updateOne(
-      { _id: new ObjectId(committeeId) },
-      { $pull: { members: { userId: uid } } }
-    );
-    return await this.collection().updateOne(
-      { _id: new ObjectId(committeeId) },
-      { $push: { members: newMember } }
-    );
+    return this.addMemberWithRole(committeeId, userId, 'member');
+  }
+
+  static async addMemberWithRole(committeeId, userId, role = 'member') {
+    const committee = await this.findById(committeeId);
+    if (!committee) return null;
+
+    const uid = String(userId);
+    const members = (committee.members || []).filter(m => String(m.userId) !== uid);
+    members.push({ userId: uid, role, joinedAt: new Date().toISOString() });
+
+    return this.updateById(committeeId, { members });
   }
 
   static async removeMember(committeeId, userId) {
-    // The members array can have userId as either a string OR an ObjectId object
-    // We need to handle both cases with separate pull operations
-    const userIdStr = String(userId);
-    const userIdObj = ObjectId.isValid(userId) ? new ObjectId(userId) : null;
-    
-    const committeeObjId = new ObjectId(committeeId);
-    
-    // Remove entries where userId is a string
-    await this.collection().updateOne(
-      { _id: committeeObjId },
-      { $pull: { members: { userId: userIdStr } } }
-    );
-    
-    // Remove entries where userId is an ObjectId (if valid)
-    if (userIdObj) {
-      await this.collection().updateOne(
-        { _id: committeeObjId },
-        { $pull: { members: { userId: userIdObj } } }
-      );
-    }
-    
-    return { success: true };
-  }
+    const committee = await this.findById(committeeId);
+    if (!committee) return null;
 
-  // New helper to add member with a role (member|guest|chair|owner)
-  static async addMemberWithRole(committeeId, userId, role = 'member') {
-    const uid = ObjectId.isValid(userId) ? new ObjectId(userId) : userId;
-    const newMember = { userId: uid, role, joinedAt: new Date() };
-    // remove any existing member entry for userId and push the new one
-    await this.collection().updateOne({ _id: new ObjectId(committeeId) }, { $pull: { members: { userId: uid } } });
-    return await this.collection().updateOne({ _id: new ObjectId(committeeId) }, { $push: { members: newMember } });
+    const uid = String(userId);
+    const members = (committee.members || []).filter(m => String(m.userId) !== uid);
+    return this.updateById(committeeId, { members });
   }
 
   static async getMemberRole(committeeId, userId) {
     const committee = await this.findById(committeeId);
     if (!committee) return null;
-    // check explicit chair/owner fields first
-    if (committee.chair && String(committee.chair) === String(userId)) return 'chair';
-    if (committee.owner && String(committee.owner) === String(userId)) return 'owner';
-    if (!committee.members) return null;
-    for (const m of committee.members) {
-      if (!m) continue;
-      if (typeof m === 'string' || ObjectId.isValid(m)) {
-        if (String(m) === String(userId)) return 'member';
-        continue;
-      }
-      const mid = m.userId || m._id || m.id;
-      if (mid && String(mid) === String(userId)) return m.role || 'member';
-    }
-    return null;
+
+    const uid = String(userId);
+    if (committee.chair && String(committee.chair) === uid) return 'chair';
+    if (committee.owner && String(committee.owner) === uid) return 'owner';
+
+    const member = (committee.members || []).find(m => String(m.userId) === uid);
+    return member?.role || null;
   }
 
   static async isGuest(committeeId, userId) {
-    const role = await this.getMemberRole(committeeId, userId);
-    return role === 'guest';
+    return (await this.getMemberRole(committeeId, userId)) === 'guest';
   }
 
   static async isMember(committeeId, userId) {
     const role = await this.getMemberRole(committeeId, userId);
-    return role && role !== 'guest';
+    return role != null && role !== 'guest';
   }
 
   static async isChair(committeeId, userId) {
@@ -211,210 +196,128 @@ class Committee {
   }
 
   static async addChair(committeeId, userId) {
-    await this.updateById(committeeId, { chair: userId });
-    // ensure membership record for chair
+    await this.updateById(committeeId, { chair: String(userId) });
     return this.addMemberWithRole(committeeId, userId, 'chair');
   }
 
-  // Motion-related methods (embedded documents)
+  // ── Embedded motion methods ────────────────────────────────────────────────
+  // Motions are stored as a List attribute inside the committee item.
+  // All operations use read-modify-write on the motions array.
 
   static async createMotion(committeeId, motionData) {
+    const committee = await this.findById(committeeId);
+    if (!committee) return null;
+
+    const motionId = randomUUID();
+    const now = new Date().toISOString();
+
     const motion = {
-      _id: new ObjectId(),
+      motionId,
       title: motionData.title,
       description: motionData.description,
       fullDescription: motionData.fullDescription || motionData.description,
-      author: motionData.author ? (typeof motionData.author === 'string' ? new ObjectId(motionData.author) : motionData.author) : null,
-      
-      // Robert's Rules of Order fields
+      author: motionData.author ? String(motionData.author) : null,
       motionType: motionData.motionType || 'main',
       motionTypeLabel: motionData.motionTypeLabel || 'Main Motion',
       debatable: motionData.debatable !== undefined ? motionData.debatable : true,
       amendable: motionData.amendable !== undefined ? motionData.amendable : true,
       voteRequired: motionData.voteRequired || 'majority',
-      // Canonical field: targetMotionId; keep amendTargetMotionId for backward compatibility
-      targetMotionId: motionData.targetMotionId ? new ObjectId(motionData.targetMotionId) : (motionData.amendTargetMotionId ? new ObjectId(motionData.amendTargetMotionId) : null),
-      amendTargetMotionId: motionData.amendTargetMotionId ? new ObjectId(motionData.amendTargetMotionId) : null,
-      
+      targetMotionId: motionData.targetMotionId ? String(motionData.targetMotionId) : null,
       status: motionData.status || 'active',
-      votes: {
-        yes: 0,
-        no: 0,
-        abstain: 0
-      },
-      
-      // Chair Control Panel fields
+      votes: { yes: 0, no: 0, abstain: 0 },
       isAnonymous: motionData.isAnonymous || false,
-      secondedBy: motionData.secondedBy ? new ObjectId(motionData.secondedBy) : null,
-      votingStatus: motionData.votingStatus || 'not-started', // 'not-started' | 'open' | 'closed'
+      secondedBy: motionData.secondedBy ? String(motionData.secondedBy) : null,
+      votingStatus: motionData.votingStatus || 'not-started',
       votingOpenedAt: motionData.votingOpenedAt || null,
       votingClosedAt: motionData.votingClosedAt || null,
-      
-      createdAt: new Date(),
-      updatedAt: new Date()
+      createdAt: now,
+      updatedAt: now,
     };
 
-    const result = await this.collection().findOneAndUpdate(
-      { _id: new ObjectId(committeeId) },
-      {
-        $push: { motions: motion },
-        $set: { updatedAt: new Date() }
-      },
-      { returnDocument: 'after' }
-    );
-
+    const motions = [...(committee.motions || []), motion];
+    await this.updateById(committeeId, { motions });
     return motion;
   }
 
   static async findMotions(committeeId, page = 1, limit = 10, options = {}) {
-    const includeSubsidiaries = !!options.includeSubsidiaries;
-    const typeFilter = options.type || null;
-    const statusFilter = options.status || null;
-    const targetMotion = options.targetMotion || null;
     const committee = await this.findById(committeeId);
-
-    if (!committee || !committee.motions) {
-      return {
-        motions: [],
-        page,
-        limit,
-        totalPages: 0,
-        total: 0
-      };
+    if (!committee?.motions?.length) {
+      return { motions: [], page, limit, totalPages: 0, total: 0 };
     }
 
-    // Sort motions by createdAt (newest first)
-    const sortedMotions = committee.motions.sort((a, b) =>
-      new Date(b.createdAt) - new Date(a.createdAt)
+    const { type, status, targetMotion, includeSubsidiaries } = options;
+
+    let motions = [...committee.motions].sort(
+      (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
     );
 
-    // Build parent/child map so we can optionally attach subsidiaries to parent motions
+    // Build child map for subsidiaries
     const childMap = {};
-    for (const m of sortedMotions) {
-      try {
-        const parentId = String(m.targetMotionId || m.targetMotionId?._id || m.amendTargetMotionId || m.amendTargetMotionId?._id || '');
-        if (parentId) {
-          childMap[parentId] = childMap[parentId] || [];
-          childMap[parentId].push(m);
-        }
-      } catch (e) { /* ignore */ }
+    for (const m of motions) {
+      if (m.targetMotionId) {
+        childMap[m.targetMotionId] = childMap[m.targetMotionId] || [];
+        childMap[m.targetMotionId].push(m);
+      }
     }
 
-    // Select the set of motions to paginate over, applying requested filters first
-    // Start from either all motions or top-level motions depending on includeSubsidiaries
-    // Note: Reconsider motions are treated as top-level even though they have a targetMotionId
-    const motionsBase = includeSubsidiaries ? sortedMotions : sortedMotions.filter(m => {
-      const targetId = m.targetMotionId || m.targetMotionId?._id || m.amendTargetMotionId || m.amendTargetMotionId?._id;
-      // Include motions without a target, OR reconsider motions (which should appear standalone)
-      return !targetId || m.motionType === 'reconsider';
-    });
-
-    // Apply filters across the base set
-    let filteredUnpaginated = motionsBase;
-    if (typeFilter) {
-      filteredUnpaginated = filteredUnpaginated.filter(m => m.motionType === typeFilter);
+    // Filter to top-level unless includeSubsidiaries requested
+    const subsidiaryTypes = ['amend', 'refer_to_committee', 'postpone', 'limit_debate', 'previous_question', 'table'];
+    if (!includeSubsidiaries) {
+      motions = motions.filter(m =>
+        !m.targetMotionId || m.motionType === 'reconsider'
+      );
     }
-    if (statusFilter) {
-      // Support multiple statuses separated by comma (e.g., "passed,failed")
-      const statuses = statusFilter.split(',').map(s => s.trim());
-      // Support legacy 'past' status which should be treated same as 'passed' or 'failed'
-      const includesPast = statuses.includes('passed') || statuses.includes('failed');
-      filteredUnpaginated = filteredUnpaginated.filter(m => {
-        if (statuses.includes(m.status)) return true;
-        // Legacy support: 'past' status should show in 'passed,failed' filter
-        if (includesPast && m.status === 'past') return true;
-        return false;
-      });
+
+    if (type) motions = motions.filter(m => m.motionType === type);
+    if (status) {
+      const statuses = status.split(',').map(s => s.trim());
+      motions = motions.filter(m => statuses.includes(m.status) || (m.status === 'past' && (statuses.includes('passed') || statuses.includes('failed'))));
     }
     if (targetMotion) {
-      filteredUnpaginated = filteredUnpaginated.filter(m => {
-        const t = m.targetMotionId || m.amendTargetMotionId;
-        return t && String(t) === String(targetMotion);
-      });
+      motions = motions.filter(m => m.targetMotionId && String(m.targetMotionId) === String(targetMotion));
     }
 
-    if (includeSubsidiaries) {
-      // Return full paginated motions (including subsidiaries), but attach subsidiaries to each motion in the page
-      const skip = (page - 1) * limit;
-      const paginatedMotions = filteredUnpaginated.slice(skip, skip + limit);
-      const withSubs = paginatedMotions.map(m => ({ ...m, subsidiaries: childMap[String(m._id || m.id)] || [] }));
-      return {
-        motions: withSubs,
-        page,
-        limit,
-        totalPages: Math.ceil(filteredUnpaginated.length / limit),
-        total: filteredUnpaginated.length
-      };
-    }
+    const total = motions.length;
+    const skip = (page - 1) * limit;
+    const paginated = motions.slice(skip, skip + limit).map(m => ({
+      ...m,
+      subsidiaries: childMap[m.motionId] || [],
+    }));
 
-    // Exclude subsidiary motions: filter out motions that reference a parent
-    // Apply pagination to filtered top-level motions
-    const skipTop = (page - 1) * limit;
-    const paginatedTopMotions = filteredUnpaginated.slice(skipTop, skipTop + limit);
-    const withSubsTop = paginatedTopMotions.map(m => ({ ...m, subsidiaries: childMap[String(m._id || m.id)] || [] }));
-    return {
-      motions: withSubsTop,
-      page,
-      limit,
-      totalPages: Math.ceil(filteredUnpaginated.length / limit),
-      total: filteredUnpaginated.length
-    };
+    return { motions: paginated, page, limit, totalPages: Math.ceil(total / limit), total };
   }
 
   static async findMotionById(committeeId, motionId) {
     const committee = await this.findById(committeeId);
-
-    if (!committee || !committee.motions) {
-      return null;
-    }
-
-    return committee.motions.find(m => m._id.toString() === motionId.toString());
+    if (!committee?.motions) return null;
+    return committee.motions.find(m => String(m.motionId) === String(motionId)) || null;
   }
 
   static async updateMotion(committeeId, motionId, updates) {
-    const updateFields = {};
-    // Convert id-like fields to ObjectId where appropriate
-    if (updates.targetMotionId !== undefined && updates.targetMotionId !== null) {
-      try { updates.targetMotionId = ObjectId.isValid(updates.targetMotionId) ? new ObjectId(updates.targetMotionId) : updates.targetMotionId; } catch(e) {}
-    }
-    if (updates.amendTargetMotionId !== undefined && updates.amendTargetMotionId !== null) {
-      try { updates.amendTargetMotionId = ObjectId.isValid(updates.amendTargetMotionId) ? new ObjectId(updates.amendTargetMotionId) : updates.amendTargetMotionId; } catch(e) {}
-    }
-    Object.keys(updates).forEach(key => {
-      updateFields[`motions.$.${key}`] = updates[key];
+    const committee = await this.findById(committeeId);
+    if (!committee) return null;
+
+    const motions = (committee.motions || []).map(m => {
+      if (String(m.motionId) !== String(motionId)) return m;
+      return { ...m, ...updates, motionId: m.motionId, updatedAt: new Date().toISOString() };
     });
 
-    updateFields['motions.$.updatedAt'] = new Date();
-    updateFields['updatedAt'] = new Date();
-
-    const result = await this.collection().findOneAndUpdate(
-      {
-        _id: new ObjectId(committeeId),
-        'motions._id': new ObjectId(motionId)
-      },
-      { $set: updateFields },
-      { returnDocument: 'after' }
-    );
-
-    if (result) {
-      return result.motions.find(m => m._id.toString() === motionId.toString());
-    }
-
-    return null;
+    await this.updateById(committeeId, { motions });
+    return motions.find(m => String(m.motionId) === String(motionId)) || null;
   }
 
   static async deleteMotion(committeeId, motionId) {
-    return await this.collection().updateOne(
-      { _id: new ObjectId(committeeId) },
-      {
-        $pull: { motions: { _id: new ObjectId(motionId) } },
-        $set: { updatedAt: new Date() }
-      }
+    const committee = await this.findById(committeeId);
+    if (!committee) return null;
+
+    const motions = (committee.motions || []).filter(
+      m => String(m.motionId) !== String(motionId)
     );
+    return this.updateById(committeeId, { motions });
   }
 
   static async updateMotionVoteCounts(committeeId, motionId, voteCounts) {
-    return await this.updateMotion(committeeId, motionId, { votes: voteCounts });
+    return this.updateMotion(committeeId, motionId, { votes: voteCounts });
   }
 }
 

@@ -1,7 +1,6 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
 const Vote = require('../models/Vote');
-const Motion = require('../models/Motion');
 const Committee = require('../models/Committee');
 const Comment = require('../models/Comment');
 const User = require('../models/User');
@@ -18,41 +17,27 @@ const router = express.Router();
  */
 router.get('/committee/:id/motion/:motionId/votes', authenticate, async (req, res) => {
   try {
-    // Resolve committee by slug or id
     const committee = await Committee.findByIdOrSlug(req.params.id);
     if (!committee) {
       return res.status(404).json({ success: false, message: 'Committee not found' });
     }
 
-    // Verify motion exists (embedded motion in committee)
-    const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
     if (!motion) {
-      return res.status(404).json({
-        success: false,
-        message: 'Motion not found'
-      });
+      return res.status(404).json({ success: false, message: 'Motion not found' });
     }
 
-    // Get vote summary
     const summary = await Vote.getVoteSummary(req.params.motionId);
-
-    // Check if current user has voted
     const userVote = await Vote.findByUserAndMotion(req.user.userId, req.params.motionId);
 
     res.json({
       success: true,
       summary,
-      userVote: userVote ? {
-        vote: userVote.vote,
-        votedAt: userVote.createdAt
-      } : null
+      userVote: userVote ? { vote: userVote.vote, votedAt: userVote.createdAt } : null
     });
   } catch (error) {
     console.error('Get votes error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error fetching votes'
-    });
+    res.status(500).json({ success: false, message: 'Server error fetching votes' });
   }
 });
 
@@ -69,30 +54,24 @@ router.post('/committee/:id/motion/:motionId/vote',
   ],
   async (req, res) => {
     try {
-      // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        return res.status(400).json({
-          success: false,
-          errors: errors.array()
-        });
+        return res.status(400).json({ success: false, errors: errors.array() });
       }
 
-      // Resolve committee and verify motion exists
       const committee = await Committee.findByIdOrSlug(req.params.id);
       if (!committee) {
         return res.status(404).json({ success: false, message: 'Committee not found' });
       }
-      const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+      const committeeId = committee.committeeId;
+
+      const motion = await Committee.findMotionById(committeeId, req.params.motionId);
       if (!motion) {
-        return res.status(404).json({
-          success: false,
-          message: 'Motion not found'
-        });
+        return res.status(404).json({ success: false, message: 'Motion not found' });
       }
 
-      // Verify user's role in committee using role-aware helper to block guests
-      const role = await Committee.getMemberRole(committee._id, req.user.userId);
+      // Block guests from voting
+      const role = await Committee.getMemberRole(committeeId, req.user.userId);
       if (!role || role === 'guest') {
         return res.status(403).json({
           success: false,
@@ -103,40 +82,27 @@ router.post('/committee/:id/motion/:motionId/vote',
       const { vote, isAnonymous } = req.body;
       const settings = committee.settings || {};
 
-      // Check if abstentions are allowed
       if (vote === 'abstain' && !settings.allowAbstentions) {
-        return res.status(400).json({
-          success: false,
-          message: 'Abstentions are not allowed in this committee'
-        });
+        return res.status(400).json({ success: false, message: 'Abstentions are not allowed in this committee' });
       }
 
-      // Check voting status
       if (motion.votingStatus === 'closed') {
-        return res.status(400).json({
-          success: false,
-          message: 'Voting has been closed for this motion'
-        });
+        return res.status(400).json({ success: false, message: 'Voting has been closed for this motion' });
       }
 
-      // Normalize votingStatus - treat undefined as 'not-started'
       const currentVotingStatus = motion.votingStatus || 'not-started';
 
       // Check if voting period has expired and auto-close if needed
       if (currentVotingStatus === 'open') {
-        const wasExpired = await closeExpiredVoting(motion, committee, Committee.updateMotion, Comment.create);
+        const wasExpired = await closeExpiredVoting(motion, committee, Committee.updateMotion.bind(Committee), Comment.create.bind(Comment));
         if (wasExpired) {
-          return res.status(400).json({
-            success: false,
-            message: 'Voting period has expired for this motion'
-          });
+          return res.status(400).json({ success: false, message: 'Voting period has expired for this motion' });
         }
       }
 
-      // Check voting eligibility (unless voting is already open or user is chair)
-      const isChair = await Committee.isChair(committee._id, req.user.userId);
+      const isChair = await Committee.isChair(committeeId, req.user.userId);
       if (currentVotingStatus !== 'open' && !isChair) {
-        const eligibility = await checkVotingEligibility(motion, settings, committee._id);
+        const eligibility = await checkVotingEligibility(motion, settings, committeeId);
         if (!eligibility.eligible) {
           return res.status(400).json({
             success: false,
@@ -144,70 +110,62 @@ router.post('/committee/:id/motion/:motionId/vote',
             reasons: eligibility.reasons
           });
         }
-        
-        // If voting can begin and this is the first vote, auto-open voting
+
         if (eligibility.canBegin && currentVotingStatus === 'not-started') {
-          await Committee.updateMotion(committee._id, req.params.motionId, {
+          await Committee.updateMotion(committeeId, req.params.motionId, {
             votingStatus: 'open',
-            votingOpenedAt: new Date()
+            votingOpenedAt: new Date().toISOString()
           });
-          
+
           console.log('✓ Auto-opened voting for motion', req.params.motionId);
-          
-          // Create system message
+
           await Comment.create({
             motionId: req.params.motionId,
-            committeeId: committee._id,
+            committeeId,
             author: null,
             content: '✅ All requirements met. Voting can begin.',
             stance: 'neutral',
             isSystemMessage: true,
             messageType: 'voting-eligible'
           });
-          
-          // Create notification for all committee members
+
           try {
-            console.log('Creating voting notification for motion:', motion.title);
-            const notification = await Notification.create({
+            await Notification.create({
               type: 'voting_opened',
-              committeeId: committee._id,
+              committeeId,
               committeeTitle: committee.title,
               message: `Voting is now open for "${motion.title}"`,
               metadata: {
-                motionId: req.params.motionId.toString(),
+                motionId: req.params.motionId,
                 motionTitle: motion.title,
                 committeeSlug: committee.slug
               }
             });
-            console.log('Voting notification created:', notification);
           } catch (notifErr) {
             console.error('Failed to create voting notification:', notifErr);
           }
         }
       }
 
-      // Log for debugging
-      console.log('Casting vote:', { motionId: req.params.motionId, committeeId: committee._id, userId: req.user.userId, vote });
+      console.log('Casting vote:', { motionId: req.params.motionId, committeeId, userId: req.user.userId, vote });
 
-      // Create or update vote
       const voteRecord = await Vote.updateOrCreate(
         req.user.userId,
         req.params.motionId,
-        committee._id,
+        committeeId,
         vote,
         isAnonymous || false
       );
 
-      // If vote type is roll_call, create a system comment broadcasting the vote
+      // Roll call system comment
       if (settings.voteType === 'roll_call') {
         try {
           const user = await User.findById(req.user.userId);
           const userName = user ? (user.name || user.email || 'Unknown User') : 'Unknown User';
           const voteEmoji = vote === 'yes' ? '✅' : vote === 'no' ? '❌' : '⚪';
-          
           await Comment.create({
             motionId: req.params.motionId,
-            committeeId: committee._id,
+            committeeId,
             author: null,
             content: `${voteEmoji} Roll Call: ${userName} voted ${vote.toUpperCase()}`,
             stance: 'neutral',
@@ -219,18 +177,12 @@ router.post('/committee/:id/motion/:motionId/vote',
         }
       }
 
-      // Update motion vote counts on either embedded motion or separate motions collection
+      // Update embedded vote counts
       const updatedSummary = await Vote.getVoteSummary(req.params.motionId);
-      try {
-        await Committee.updateMotionVoteCounts(committee._id, req.params.motionId, updatedSummary);
-      } catch (err) {
-        // If committee update fails, fallback to Motion.updateVoteCounts
-        await Motion.updateVoteCounts(req.params.motionId);
-      }
+      await Committee.updateMotionVoteCounts(committeeId, req.params.motionId, updatedSummary);
 
-      // Get updated motion with new vote counts
-      const updatedMotion = await Committee.findMotionById(committee._id, req.params.motionId);
-      
+      const updatedMotion = await Committee.findMotionById(committeeId, req.params.motionId);
+
       console.log('=== MOTION STATUS AFTER VOTE ===');
       console.log('Motion found:', !!updatedMotion);
       console.log('Voting status:', updatedMotion?.votingStatus);
@@ -239,183 +191,135 @@ router.post('/committee/:id/motion/:motionId/vote',
       console.log('Motion type:', updatedMotion?.motionType);
       console.log('Vote required:', updatedMotion?.voteRequired);
       console.log('================================');
-      
-      // Check if motion has reached vote threshold and should be auto-closed
-      // Treat undefined votingStatus as 'not-started'
+
       const updatedVotingStatus = updatedMotion?.votingStatus || 'not-started';
       if (updatedMotion && updatedVotingStatus === 'open') {
-        // Determine threshold: use motion.voteRequired if present, otherwise fall back to committee default
-        // Map voteRequired values: 'majority' -> 'simple_majority', 'two-thirds' -> 'two_thirds'
         let threshold = settings.defaultVoteThreshold || 'simple_majority';
         if (updatedMotion.voteRequired) {
-          if (updatedMotion.voteRequired === 'majority') {
-            threshold = 'simple_majority';
-          } else if (updatedMotion.voteRequired === 'two-thirds') {
-            threshold = 'two_thirds';
-          } else if (updatedMotion.voteRequired === 'unanimous') {
-            threshold = 'unanimous';
-          } else if (updatedMotion.voteRequired === 'none') {
-            // Motion requires no vote - don't auto-close
-            console.log('Motion requires no vote - skipping auto-close');
-            threshold = null;
-          }
+          if (updatedMotion.voteRequired === 'majority') threshold = 'simple_majority';
+          else if (updatedMotion.voteRequired === 'two-thirds') threshold = 'two_thirds';
+          else if (updatedMotion.voteRequired === 'unanimous') threshold = 'unanimous';
+          else if (updatedMotion.voteRequired === 'none') threshold = null;
         }
-        
+
         if (threshold) {
           const result = calculateMotionResult(updatedMotion, threshold);
           const totalMembers = committee.members ? committee.members.length : 0;
           const quorumCheck = checkQuorum(updatedMotion, settings, totalMembers);
-        
+
           console.log('=== AUTO-CLOSE CHECK ===');
           console.log('Threshold:', threshold);
           console.log('Votes:', updatedMotion.votes);
           console.log('Result:', result);
           console.log('Total Members:', totalMembers);
           console.log('Quorum Check:', quorumCheck);
-          console.log('Settings quorumRequired:', settings.quorumRequired);
-        
-        // Calculate minimum member participation based on threshold
-        // For simple_majority (50%), require at least 50% of members to vote
-        // For two_thirds (66.67%), require at least 66.67% of members to vote
-        // For unanimous (100%), require all members to vote
-        let minParticipationPercent = 50; // default
-        if (threshold === 'two_thirds') {
-          minParticipationPercent = 66.67;
-        } else if (threshold === 'unanimous') {
-          minParticipationPercent = 100;
-        }
-        
-        const totalVotes = updatedMotion.votes.yes + updatedMotion.votes.no + updatedMotion.votes.abstain;
-        const participationPercent = (totalVotes / totalMembers) * 100;
-        const minParticipationMet = participationPercent >= minParticipationPercent;
-        
-        console.log('Min participation required:', minParticipationPercent + '%');
-        console.log('Current participation:', participationPercent.toFixed(2) + '%', '(' + totalVotes + '/' + totalMembers + ')');
-        console.log('Participation met:', minParticipationMet);
-        
-        // Determine if we should auto-close based on:
-        // 1. Vote threshold reached (passed or definitively failed)
-        // 2. Minimum participation met (based on threshold percentage)
-        // 3. Quorum met (if explicitly required by settings)
-        let shouldAutoClose = false;
-        let finalStatus = 'active';
-        let closureReason = '';
-        
-        // Check if motion passed with sufficient participation
-        if (result.passed && minParticipationMet && (!settings.quorumRequired || quorumCheck.met)) {
-          shouldAutoClose = true;
-          finalStatus = 'passed';
-          closureReason = `Motion passed with ${result.yesPercent}% yes votes (${threshold} threshold, ${totalVotes}/${totalMembers} members voted)`;
-          console.log('✓ Motion should pass');
-        } else if (result.passed && !minParticipationMet) {
-          console.log('✗ Motion passed vote threshold but not enough members voted');
-          console.log('   Need', minParticipationPercent + '% participation, have', participationPercent.toFixed(2) + '%');
-        } else if (result.passed && settings.quorumRequired && !quorumCheck.met) {
-          console.log('✗ Motion passed threshold but quorum not met');
-          console.log('   Quorum required:', quorumCheck.required, '| Current votes:', quorumCheck.current);
-        } else if (!result.passed) {
-          // Check if motion has definitively failed (can't reach threshold even if all remaining votes are yes)
+
+          let minParticipationPercent = 50;
+          if (threshold === 'two_thirds') minParticipationPercent = 66.67;
+          else if (threshold === 'unanimous') minParticipationPercent = 100;
+
           const totalVotes = updatedMotion.votes.yes + updatedMotion.votes.no + updatedMotion.votes.abstain;
-          const votesRemaining = totalMembers - totalVotes;
-          const maxPossibleYes = updatedMotion.votes.yes + votesRemaining;
-          const maxPossibleTotal = updatedMotion.votes.yes + updatedMotion.votes.no + votesRemaining;
-          
-          if (maxPossibleTotal > 0) {
-            const maxPossiblePercent = (maxPossibleYes / maxPossibleTotal) * 100;
-            const requiredPercent = result.requiredPercent;
-            
-            if (maxPossiblePercent < requiredPercent) {
-              shouldAutoClose = true;
-              finalStatus = 'failed';
-              closureReason = `Motion failed - cannot reach ${threshold} threshold (${result.yesPercent}% yes)`;
+          const participationPercent = totalMembers > 0 ? (totalVotes / totalMembers) * 100 : 0;
+          const minParticipationMet = participationPercent >= minParticipationPercent;
+
+          console.log('Min participation required:', minParticipationPercent + '%');
+          console.log('Current participation:', participationPercent.toFixed(2) + '%', '(' + totalVotes + '/' + totalMembers + ')');
+          console.log('Participation met:', minParticipationMet);
+
+          let shouldAutoClose = false;
+          let finalStatus = 'active';
+          let closureReason = '';
+
+          if (result.passed && minParticipationMet && (!settings.quorumRequired || quorumCheck.met)) {
+            shouldAutoClose = true;
+            finalStatus = 'passed';
+            closureReason = `Motion passed with ${result.yesPercent}% yes votes (${threshold} threshold, ${totalVotes}/${totalMembers} members voted)`;
+            console.log('✓ Motion should pass');
+          } else if (result.passed && !minParticipationMet) {
+            console.log('✗ Motion passed threshold but not enough members voted');
+          } else if (result.passed && settings.quorumRequired && !quorumCheck.met) {
+            console.log('✗ Motion passed threshold but quorum not met');
+          } else if (!result.passed) {
+            const votesRemaining = totalMembers - totalVotes;
+            const maxPossibleYes = updatedMotion.votes.yes + votesRemaining;
+            const maxPossibleTotal = updatedMotion.votes.yes + updatedMotion.votes.no + votesRemaining;
+
+            if (maxPossibleTotal > 0) {
+              const maxPossiblePercent = (maxPossibleYes / maxPossibleTotal) * 100;
+              if (maxPossiblePercent < result.requiredPercent) {
+                shouldAutoClose = true;
+                finalStatus = 'failed';
+                closureReason = `Motion failed - cannot reach ${threshold} threshold (${result.yesPercent}% yes)`;
+              }
             }
           }
-        }
-        
-        if (shouldAutoClose) {
-          // Update motion status and close voting
-          await Committee.updateMotion(committee._id, req.params.motionId, {
-            status: finalStatus,
-            votingStatus: 'closed',
-            votingClosedAt: new Date()
-          });
-          
-          // Create system message
-          const statusEmoji = finalStatus === 'passed' ? '✅' : '❌';
-          await Comment.create({
-            motionId: req.params.motionId,
-            committeeId: committee._id,
-            author: null,
-            content: `${statusEmoji} ${closureReason}`,
-            stance: 'neutral',
-            isSystemMessage: true,
-            messageType: 'voting-closed'
-          });
-          
-          console.log(`Auto-closed motion ${req.params.motionId}: ${closureReason}`);
-          
-          // If this is a reconsider motion that passed, restore the target motion
-          if (finalStatus === 'passed' && updatedMotion.motionType === 'reconsider' && updatedMotion.targetMotionId) {
-            try {
-              console.log('Reconsider motion passed - restoring target motion:', updatedMotion.targetMotionId);
-              
-              // Reset the target motion to active status and reset votes
-              await Committee.updateMotion(committee._id, String(updatedMotion.targetMotionId), {
-                status: 'active',
-                votingStatus: 'not-started',
-                votingClosedAt: null,
-                votes: {
-                  yes: 0,
-                  no: 0,
-                  abstain: 0
-                }
-              });
-              
-              // Delete all votes for the target motion
-              const { ObjectId } = require('mongodb');
-              await Vote.collection().deleteMany({
-                motionId: new ObjectId(updatedMotion.targetMotionId)
-              });
-              
-              // Create system message on the reconsidered motion
-              await Comment.create({
-                motionId: String(updatedMotion.targetMotionId),
-                committeeId: committee._id,
-                author: null,
-                content: '🔄 This motion has been reconsidered and is now open for discussion and voting again.',
-                stance: 'neutral',
-                isSystemMessage: true,
-                messageType: 'motion-reconsidered'
-              });
-              
-              console.log('✓ Target motion successfully reconsidered and reset');
-            } catch (err) {
-              console.error('Error reconsidering target motion:', err);
+
+          if (shouldAutoClose) {
+            await Committee.updateMotion(committeeId, req.params.motionId, {
+              status: finalStatus,
+              votingStatus: 'closed',
+              votingClosedAt: new Date().toISOString()
+            });
+
+            const statusEmoji = finalStatus === 'passed' ? '✅' : '❌';
+            await Comment.create({
+              motionId: req.params.motionId,
+              committeeId,
+              author: null,
+              content: `${statusEmoji} ${closureReason}`,
+              stance: 'neutral',
+              isSystemMessage: true,
+              messageType: 'voting-closed'
+            });
+
+            console.log(`Auto-closed motion ${req.params.motionId}: ${closureReason}`);
+
+            // If a reconsider motion passed, restore the target motion
+            if (finalStatus === 'passed' && updatedMotion.motionType === 'reconsider' && updatedMotion.targetMotionId) {
+              try {
+                console.log('Reconsider motion passed - restoring target motion:', updatedMotion.targetMotionId);
+
+                await Committee.updateMotion(committeeId, String(updatedMotion.targetMotionId), {
+                  status: 'active',
+                  votingStatus: 'not-started',
+                  votingClosedAt: null,
+                  votes: { yes: 0, no: 0, abstain: 0 }
+                });
+
+                // Delete all votes for the target motion
+                await Vote.deleteByMotion(String(updatedMotion.targetMotionId));
+
+                await Comment.create({
+                  motionId: String(updatedMotion.targetMotionId),
+                  committeeId,
+                  author: null,
+                  content: '🔄 This motion has been reconsidered and is now open for discussion and voting again.',
+                  stance: 'neutral',
+                  isSystemMessage: true,
+                  messageType: 'motion-reconsidered'
+                });
+
+                console.log('✓ Target motion successfully reconsidered and reset');
+              } catch (err) {
+                console.error('Error reconsidering target motion:', err);
+              }
             }
           }
-        }
         }
       }
 
-      // Fetch the updated summary and the current user's vote
       const summary = await Vote.getVoteSummary(req.params.motionId);
       const userVote = await Vote.findByUserAndMotion(req.user.userId, req.params.motionId);
 
       res.status(201).json({
         success: true,
         message: 'Vote recorded successfully',
-        vote: userVote ? {
-          vote: userVote.vote,
-          votedAt: userVote.updatedAt || userVote.createdAt
-        } : null,
+        vote: userVote ? { vote: userVote.vote, votedAt: userVote.updatedAt || userVote.createdAt } : null,
         summary
       });
     } catch (error) {
       console.error('Cast vote error:', error);
-      res.status(500).json({
-        success: false,
-        message: 'Server error recording vote'
-      });
+      res.status(500).json({ success: false, message: 'Server error recording vote' });
     }
   }
 );
@@ -427,55 +331,36 @@ router.post('/committee/:id/motion/:motionId/vote',
  */
 router.delete('/committee/:id/motion/:motionId/vote', authenticate, async (req, res) => {
   try {
-    // Resolve committee and verify motion exists
     const committee = await Committee.findByIdOrSlug(req.params.id);
     if (!committee) {
       return res.status(404).json({ success: false, message: 'Committee not found' });
     }
-    const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const committeeId = committee.committeeId;
+
+    const motion = await Committee.findMotionById(committeeId, req.params.motionId);
     if (!motion) {
-      return res.status(404).json({
-        success: false,
-        message: 'Motion not found'
-      });
+      return res.status(404).json({ success: false, message: 'Motion not found' });
     }
 
-    // Verify user is allowed to act on votes (guest users cannot cast or remove votes)
-    const role = await Committee.getMemberRole(committee._id, req.user.userId);
+    const role = await Committee.getMemberRole(committeeId, req.user.userId);
     if (!role || role === 'guest') {
       return res.status(403).json({ success: false, message: 'Guests are not permitted to vote' });
     }
 
-    // Delete vote
-    const result = await Vote.deleteByUserAndMotion(req.user.userId, req.params.motionId);
-
-    if (result.deletedCount === 0) {
-      return res.status(404).json({
-        success: false,
-        message: 'No vote found to delete'
-      });
+    const existing = await Vote.findByUserAndMotion(req.user.userId, req.params.motionId);
+    if (!existing) {
+      return res.status(404).json({ success: false, message: 'No vote found to delete' });
     }
 
-    // Update motion vote counts (prefer embedded committee motion update if possible) and fetch summary
-    const updatedSummary = await Vote.getVoteSummary(req.params.motionId);
-    try {
-      await Committee.updateMotionVoteCounts(committee._id, req.params.motionId, updatedSummary);
-    } catch (err) {
-      await Motion.updateVoteCounts(req.params.motionId);
-    }
-    const summary = updatedSummary;
+    await Vote.deleteByUserAndMotion(req.user.userId, req.params.motionId);
 
-    res.json({
-      success: true,
-      message: 'Vote removed successfully',
-      summary
-    });
+    const summary = await Vote.getVoteSummary(req.params.motionId);
+    await Committee.updateMotionVoteCounts(committeeId, req.params.motionId, summary);
+
+    res.json({ success: true, message: 'Vote removed successfully', summary });
   } catch (error) {
     console.error('Delete vote error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Server error deleting vote'
-    });
+    res.status(500).json({ success: false, message: 'Server error deleting vote' });
   }
 });
 

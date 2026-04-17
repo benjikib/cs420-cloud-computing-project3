@@ -27,7 +27,7 @@ function ChairControlPage() {
                 
                 // If committeeId is in URL, auto-select that committee
                 if (committeeId && data.committees) {
-                    const committee = data.committees.find(c => c._id === committeeId || c.slug === committeeId);
+                    const committee = data.committees.find(c => c.committeeId === committeeId || c.slug === committeeId);
                     if (committee) {
                         setSelectedCommittee(committee);
                     }
@@ -79,10 +79,10 @@ function ChairControlPage() {
                                     <div className="space-y-3">
                                         {committees.map((committee) => (
                                             <button
-                                                key={committee._id}
+                                                key={committee.committeeId}
                                                 onClick={() => setSelectedCommittee(committee)}
                                                 className={`w-full text-left rounded-lg transition-all p-6 border-2 border-transparent ${
-                                                    selectedCommittee?._id === committee._id
+                                                    selectedCommittee?.committeeId === committee.committeeId
                                                         ? 'bg-white dark:bg-lighter-green shadow-md'
                                                         : 'bg-gray-50 dark:bg-gray-800'
                                                 }`}
@@ -122,7 +122,7 @@ function ChairControlPage() {
                                     </div>
                                 ) : (
                                     <ChairControlPanel
-                                        committeeId={selectedCommittee._id}
+                                        committeeId={selectedCommittee.committeeId || selectedCommittee.slug}
                                         committee={selectedCommittee}
                                     />
                                 )}

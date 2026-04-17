@@ -58,8 +58,8 @@ function CommitteeMotionsPage() {
                         const membersList = (membersRes && membersRes.members) || []; 
                         // current.user.id might be an ObjectId string; members have _id
                         if (user) {
-                            const uid = String(user.id || user._id || user.id);
-                            if (membersList.some(m => { if (!m) return false; const mid = m._id || m.id || m.userId || m; return String(mid) === uid; })) {
+                            const uid = String(user.id || user.userId);
+                            if (membersList.some(m => { if (!m) return false; const mid = m.userId || m.id || m; return String(mid) === uid; })) {
                                 allowed = true;
                             }
                             // Fallback: check if the user is a declared guest in their user doc (legacy data)
@@ -74,7 +74,7 @@ function CommitteeMotionsPage() {
 
                     // Check chair/owner fields on committee
                     if (!allowed && fetchedCommittee) {
-                        const uid = user ? String(user.id || user._id || user.id) : null;
+                        const uid = user ? String(user.id || user.userId) : null;
                         if (uid) {
                             if (String(fetchedCommittee.chair || '') === uid || String(fetchedCommittee.owner || '') === uid) {
                                 allowed = true;
@@ -181,7 +181,7 @@ function CommitteeMotionsPage() {
         const deletedMotionId = location?.state?.deletedMotionId;
         if (deletedMotionId) {
             // Remove from local state immediately for snappy UI
-            setMotions(prev => prev.filter(m => String(m._id || m.id) !== String(deletedMotionId)));
+            setMotions(prev => prev.filter(m => String(m.motionId || m.id) !== String(deletedMotionId)));
             // Re-fetch to ensure canonical dataset
             (async () => {
                 try {
@@ -272,7 +272,7 @@ function CommitteeMotionsPage() {
                                 <div className="motions-grid">
                                     {filteredMotions.map(motion => (
                                         <MotionCard
-                                            key={motion._id || motion.id}
+                                            key={motion.motionId || motion.id}
                                             motion={motion}
                                             committeeSlug={committee?.slug || id}
                                         />

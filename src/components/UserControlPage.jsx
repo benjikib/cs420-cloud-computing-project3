@@ -35,7 +35,7 @@ function UserControlPage() {
                         if (committeesResponse.success) {
                             // Transform committees to match expected format
                             const transformedCommittees = committeesResponse.committees.map(committee => ({
-                                id: committee._id,
+                                id: committee.committeeId || committee.id,
                                 title: committee.title,
                                 description: committee.description,
                                 memberCount: committee.members?.length || 0,

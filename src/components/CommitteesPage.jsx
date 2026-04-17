@@ -109,8 +109,8 @@ function CommitteesPage() {
                         <div className="motions-grid">
                             {filteredCommittees.map(committee => (
                                 <Link
-                                    key={committee._id}
-                                    to={`/committee/${committee.slug || committee._id}`}
+                                    key={committee.committeeId || committee.id}
+                                    to={`/committee/${committee.slug || committee.committeeId}`}
                                     className="motion-card block"
                                 >
                                     <div className="motion-header">

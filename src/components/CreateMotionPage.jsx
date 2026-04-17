@@ -69,10 +69,10 @@ function CreateMotionPage() {
                             const membersRes = await getCommitteeMembers(id);
                             const membersList = (membersRes && membersRes.members) || [];
                             if (user) {
-                                const uid = String(user.id || user._id || user.id);
+                                const uid = String(user.id || user.userId);
                                 if (membersList.some(m => {
                                     if (!m) return false;
-                                    const mid = m._id || m.id || m.userId || m;
+                                    const mid = m.userId || m.id || m;
                                     return String(mid) === uid;
                                 })) {
                                     allowed = true;
@@ -84,7 +84,7 @@ function CreateMotionPage() {
 
                         // Check chair/owner fields if still not allowed
                         if (!allowed && fetchedCommittee) {
-                            const uid = user ? String(user.id || user._id || user.id) : null;
+                            const uid = user ? String(user.id || user.userId) : null;
                             if (uid) {
                                 if (String(fetchedCommittee.chair || '') === uid || String(fetchedCommittee.owner || '') === uid) {
                                     allowed = true;
@@ -94,7 +94,7 @@ function CreateMotionPage() {
 
                         // Final check: if user is in guestCommittees, deny access
                         if (user && user.guestCommittees) {
-                            const committeeIdStr = fetchedCommittee._id ? String(fetchedCommittee._id) : id;
+                            const committeeIdStr = fetchedCommittee.committeeId ? String(fetchedCommittee.committeeId) : id;
                             if (user.guestCommittees.map(String).includes(committeeIdStr)) {
                                 allowed = false;
                             }
@@ -595,21 +595,21 @@ function CreateMotionPage() {
                                             })
                                             .map((motion) => (
                                             <div
-                                                key={motion._id || motion.id}
-                                                onClick={() => handleChange({ target: { name: 'amendTargetMotionId', value: String(motion._id || motion.id) } })}
+                                                key={motion.motionId || motion.id}
+                                                onClick={() => handleChange({ target: { name: 'amendTargetMotionId', value: String(motion.motionId || motion.id) } })}
                                                 className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                                                    (formData.amendTargetMotionId === String(motion._id || motion.id) || formData.targetMotionId === String(motion._id || motion.id))
+                                                    (formData.amendTargetMotionId === String(motion.motionId || motion.id) || formData.targetMotionId === String(motion.motionId || motion.id))
                                                         ? 'border-amber-500 dark:border-amber-400 bg-white dark:bg-amber-900/30 shadow-md'
                                                         : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-amber-300 dark:hover:border-amber-600'
                                                 }`}
                                             >
                                                 <div className="flex items-start gap-3">
                                                     <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5 flex-shrink-0 ${
-                                                        (formData.amendTargetMotionId === String(motion._id || motion.id) || formData.targetMotionId === String(motion._id || motion.id))
+                                                        (formData.amendTargetMotionId === String(motion.motionId || motion.id) || formData.targetMotionId === String(motion.motionId || motion.id))
                                                             ? 'border-amber-500 bg-amber-500'
                                                             : 'border-gray-300 dark:border-gray-600'
                                                     }`}>
-                                                        {(formData.amendTargetMotionId === String(motion._id || motion.id) || formData.targetMotionId === String(motion._id || motion.id)) && (
+                                                        {(formData.amendTargetMotionId === String(motion.motionId || motion.id) || formData.targetMotionId === String(motion.motionId || motion.id)) && (
                                                             <div className="w-2.5 h-2.5 rounded-full bg-white"></div>
                                                         )}
                                                     </div>
@@ -619,7 +619,7 @@ function CreateMotionPage() {
                                                                 {motion.title}
                                                             </h5>
                                                             <span className="text-xs px-2 py-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 rounded ml-2 flex-shrink-0">
-                                                                Motion #{String(motion._id || motion.id).slice(0, 6)}
+                                                                Motion #{String(motion.motionId || motion.id).slice(0, 6)}
                                                             </span>
                                                         </div>
                                                         <p className="text-sm text-gray-600 dark:text-gray-400 line-clamp-2">
@@ -662,21 +662,21 @@ function CreateMotionPage() {
                                             .filter(m => ['passed', 'failed', 'voided'].includes(m.status))
                                             .map((motion) => (
                                             <div
-                                                key={motion._id || motion.id}
-                                                onClick={() => handleChange({ target: { name: 'targetMotionId', value: String(motion._id || motion.id) } })}
+                                                key={motion.motionId || motion.id}
+                                                onClick={() => handleChange({ target: { name: 'targetMotionId', value: String(motion.motionId || motion.id) } })}
                                                 className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                                                    formData.targetMotionId === String(motion._id || motion.id)
+                                                    formData.targetMotionId === String(motion.motionId || motion.id)
                                                         ? 'border-blue-500 dark:border-blue-400 bg-white dark:bg-blue-900/30 shadow-md'
                                                         : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:border-blue-300 dark:hover:border-blue-600'
                                                 }`}
                                             >
                                                 <div className="flex items-start gap-3">
                                                     <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center mt-0.5 flex-shrink-0 ${
-                                                        formData.targetMotionId === String(motion._id || motion.id)
+                                                        formData.targetMotionId === String(motion.motionId || motion.id)
                                                             ? 'border-blue-500 bg-blue-500'
                                                             : 'border-gray-300 dark:border-gray-600'
                                                     }`}>
-                                                        {formData.targetMotionId === String(motion._id || motion.id) && (
+                                                        {formData.targetMotionId === String(motion.motionId || motion.id) && (
                                                             <div className="w-2.5 h-2.5 rounded-full bg-white"></div>
                                                         )}
                                                     </div>

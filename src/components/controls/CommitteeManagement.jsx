@@ -43,7 +43,7 @@ function CommitteeManagement({ committeeId, committee: initialCommittee }) {
         try {
             if (member.committeeRole) return member.committeeRole === 'guest';
             const gc = member.guestCommittees || member.guest || [];
-            const cid = String((committee && (committee._id || committee.id)) || committeeId);
+            const cid = String((committee && (committee.committeeId || committee.id)) || committeeId);
             if (!Array.isArray(gc)) return false;
             return gc.map(String).includes(cid);
         } catch (e) {
@@ -169,7 +169,7 @@ function CommitteeManagement({ committeeId, committee: initialCommittee }) {
                     ) : (
                         <div className="space-y-2">
                             {members.filter(m => userMatchesSearch(m, memberSearch)).map(member => {
-                                const memberId = member._id || member.id;
+                                const memberId = member.userId || member.id;
                                 const isChair = committee.chair && memberId === committee.chair;
                                 const isOwner = committee.owner && memberId === committee.owner;
                                 const isGuest = memberIsGuest(member);
@@ -254,7 +254,7 @@ function CommitteeManagement({ committeeId, committee: initialCommittee }) {
 
                         <div className="space-y-2 max-h-48 overflow-auto">
                             {potentialMembers.filter(u => userMatchesSearch(u, potentialSearch)).map(user => {
-                                const userId = user._id || user.id;
+                                const userId = user.userId || user.id;
                                 const selectedRole = addRoleSelection[userId] || 'member';
                                 return (
                                     <div key={userId} className="flex items-center justify-between p-2 bg-gray-50 dark:bg-gray-600 rounded">

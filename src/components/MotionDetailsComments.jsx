@@ -138,7 +138,7 @@ export default function MotionDetailsComments({ committeeId, motionId, isDebatab
                                                         };
 
                                                         return (
-                                                                <div key={comment._id} className="flex justify-center my-2">
+                                                                <div key={comment.commentId || comment.id} className="flex justify-center my-2">
                                                                         <div className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${getSystemMessageStyle(comment.messageType)} max-w-[80%]`}>
                                                                                 <span className="text-base">{getSystemIcon(comment.messageType)}</span>
                                                                                 <p className="text-sm font-medium">{comment.content}</p>
@@ -152,10 +152,10 @@ export default function MotionDetailsComments({ committeeId, motionId, isDebatab
 
                                                 // Regular user comment rendering
                                                 const senderName = comment.authorName || comment.authorInfo?.name || 'Unknown User';
-                                                const isMine = currentUser && String(currentUser.id || currentUser._id) === String(comment.author);
+                                                const isMine = currentUser && String(currentUser.id || currentUser.userId) === String(comment.author);
                                                 
                                                 return (
-                                                        <div key={comment._id} className={`flex items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
+                                                        <div key={comment.commentId || comment.id} className={`flex items-center gap-2 ${isMine ? 'justify-end' : 'justify-start'}`}>
                                                                 {!isMine && (
                                                                         <div className="w-8 h-8 rounded-full bg-gray-300 flex-shrink-0 overflow-hidden self-start mt-6">
                                                                                 <div className="w-full h-full flex items-center justify-center text-gray-600">

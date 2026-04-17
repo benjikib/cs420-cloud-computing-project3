@@ -40,7 +40,7 @@ function CommitteeHistory({ committeeId, committee }) {
         setSelectedMotion(motion);
         setLoadingComments(true);
         try {
-            const response = await getCommentsByMotion(committeeId, motion._id);
+            const response = await getCommentsByMotion(committeeId, motion.motionId || motion.id);
             setMotionComments(response.comments || []);
         } catch (err) {
             console.error('Error loading comments:', err);
@@ -207,10 +207,10 @@ function CommitteeHistory({ committeeId, committee }) {
                             ) : (
                                 motions.map((motion) => (
                                     <div
-                                        key={motion._id}
+                                        key={motion.motionId || motion.id}
                                         onClick={() => handleSelectMotion(motion)}
                                         className={`p-4 rounded-lg border-2 cursor-pointer transition-all ${
-                                            selectedMotion?._id === motion._id
+                                            selectedMotion?.motionId === motion.motionId
                                                 ? 'border-darker-green bg-superlight-green/10 dark:bg-darker-green/10'
                                                 : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
                                         }`}
@@ -386,7 +386,7 @@ function CommitteeHistory({ committeeId, committee }) {
                                     ) : (
                                         <div className="space-y-3 max-h-[300px] overflow-y-auto">
                                             {motionComments.map((comment) => (
-                                                <div key={comment._id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded">
+                                                <div key={comment.commentId || comment.id} className="p-3 bg-gray-50 dark:bg-gray-900 rounded">
                                                     <div className="flex items-start justify-between mb-1">
                                                         <span className="text-sm font-medium text-gray-800 dark:text-gray-200">
                                                             {comment.authorName || 'Unknown'}

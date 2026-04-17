@@ -1,114 +1,130 @@
-const { ObjectId } = require('mongodb');
-const { getDB } = require('../config/database');
+const {
+  GetCommand,
+  PutCommand,
+  UpdateCommand,
+  DeleteCommand,
+  ScanCommand,
+  QueryCommand,
+} = require('@aws-sdk/lib-dynamodb');
+const { randomUUID } = require('crypto');
+const { getDynamo } = require('../config/database');
+const User = require('./User');
+
+const TABLE = process.env.DYNAMODB_COMMENTS_TABLE || 'commie-comments';
 
 class Comment {
-  static collection() {
-    return getDB().collection('comments');
+  static dynamo() {
+    return getDynamo();
   }
 
   static async create(commentData) {
-    const comment = {
-      motionId: new ObjectId(commentData.motionId),
-      committeeId: new ObjectId(commentData.committeeId),
-      author: commentData.author, // User ID
+    const commentId = randomUUID();
+    const now = new Date().toISOString();
+
+    const item = {
+      commentId,
+      motionId: commentData.motionId ? String(commentData.motionId) : null,
+      committeeId: commentData.committeeId ? String(commentData.committeeId) : null,
+      author: commentData.author ? String(commentData.author) : null,
       content: commentData.content,
-      stance: commentData.stance || 'neutral', // pro, con, neutral
+      stance: commentData.stance || 'neutral',
       isSystemMessage: commentData.isSystemMessage || false,
-      messageType: commentData.messageType || null, // 'voting-eligible' | 'roll-call-vote' | 'voting-opened' | 'voting-closed'
-      createdAt: new Date(),
-      updatedAt: new Date()
+      messageType: commentData.messageType || null,
+      createdAt: now,
+      updatedAt: now,
     };
 
-    const result = await this.collection().insertOne(comment);
-    return { _id: result.insertedId, ...comment };
+    await this.dynamo().send(new PutCommand({
+      TableName: TABLE,
+      Item: item,
+      ConditionExpression: 'attribute_not_exists(commentId)',
+    }));
+
+    return item;
   }
 
   static async findByMotion(motionId, page = 1, limit = 20) {
+    const result = await this.dynamo().send(new QueryCommand({
+      TableName: TABLE,
+      IndexName: 'motionId-index',
+      KeyConditionExpression: 'motionId = :mid',
+      ExpressionAttributeValues: { ':mid': String(motionId) },
+    }));
+
+    const all = result.Items || [];
+    all.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+    const total = all.length;
     const skip = (page - 1) * limit;
-    const comments = await this.collection()
-      .find({ motionId: new ObjectId(motionId) })
-      .sort({ createdAt: 1 })  // Sort ascending (oldest first) for chat-like display
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const comments = all.slice(skip, skip + limit);
 
     // Populate author information
-    const userCollection = getDB().collection('users');
     const commentsWithAuthors = await Promise.all(
       comments.map(async (comment) => {
         if (comment.author) {
-          // Try both ObjectId and string format for author field
-          let user = null;
           try {
-            // First try as ObjectId
-            user = await userCollection.findOne(
-              { _id: new ObjectId(comment.author) },
-              { projection: { name: 1, email: 1, picture: 1 } }
-            );
+            const user = await User.findById(comment.author);
+            return {
+              ...comment,
+              authorName: user ? (user.settings?.displayName || user.name || 'Unknown User') : 'Unknown User',
+              authorInfo: user ? { name: user.settings?.displayName || user.name, email: user.email, picture: user.picture } : null,
+            };
           } catch (e) {
-            // If that fails, try as string (in case it's stored differently)
-            user = await userCollection.findOne(
-              { _id: comment.author },
-              { projection: { name: 1, email: 1, picture: 1 } }
-            );
+            return { ...comment, authorName: 'Unknown User', authorInfo: null };
           }
-          
-          // Also try userId field if _id didn't work
-          if (!user) {
-            user = await userCollection.findOne(
-              { userId: comment.author },
-              { projection: { name: 1, email: 1, picture: 1 } }
-            );
-          }
-          
-          return {
-            ...comment,
-            authorName: user?.name || 'Unknown User',
-            authorInfo: user ? { name: user.name, email: user.email, picture: user.picture } : null
-          };
         }
-        return {
-          ...comment,
-          authorName: 'Unknown User',
-          authorInfo: null
-        };
+        return { ...comment, authorName: 'Unknown User', authorInfo: null };
       })
     );
-
-    const total = await this.collection().countDocuments({
-      motionId: new ObjectId(motionId)
-    });
 
     return {
       comments: commentsWithAuthors,
       page,
       limit,
       totalPages: Math.ceil(total / limit),
-      total
+      total,
     };
   }
 
   static async findById(id) {
-    return await this.collection().findOne({ _id: new ObjectId(id) });
+    const result = await this.dynamo().send(new GetCommand({
+      TableName: TABLE,
+      Key: { commentId: String(id) },
+    }));
+    return result.Item || null;
   }
 
   static async updateById(id, updates) {
-    const updateData = {
-      ...updates,
-      updatedAt: new Date()
-    };
+    const now = new Date().toISOString();
+    const fields = { ...updates, updatedAt: now };
 
-    const result = await this.collection().findOneAndUpdate(
-      { _id: new ObjectId(id) },
-      { $set: updateData },
-      { returnDocument: 'after' }
-    );
+    const exprParts = [];
+    const exprNames = {};
+    const exprValues = {};
 
-    return result;
+    for (const [key, val] of Object.entries(fields)) {
+      exprParts.push(`#${key} = :${key}`);
+      exprNames[`#${key}`] = key;
+      exprValues[`:${key}`] = val;
+    }
+
+    const result = await this.dynamo().send(new UpdateCommand({
+      TableName: TABLE,
+      Key: { commentId: String(id) },
+      UpdateExpression: `SET ${exprParts.join(', ')}`,
+      ExpressionAttributeNames: exprNames,
+      ExpressionAttributeValues: exprValues,
+      ReturnValues: 'ALL_NEW',
+    }));
+
+    return result.Attributes || null;
   }
 
   static async deleteById(id) {
-    return await this.collection().deleteOne({ _id: new ObjectId(id) });
+    return this.dynamo().send(new DeleteCommand({
+      TableName: TABLE,
+      Key: { commentId: String(id) },
+    }));
   }
 }
 

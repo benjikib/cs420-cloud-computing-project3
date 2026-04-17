@@ -2,7 +2,6 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { ObjectId } = require('mongodb');
 const User = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 
@@ -59,7 +58,7 @@ router.post('/register',
 
       // Generate JWT token
       const token = jwt.sign(
-        { userId: user._id.toString() },
+        { userId: user.userId },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
       );
@@ -69,7 +68,7 @@ router.post('/register',
         message: 'User registered successfully',
         token,
         user: {
-          id: user._id,
+          id: user.userId,
           email: user.email,
           name: user.name,
         }
@@ -139,7 +138,7 @@ router.post('/login',
 
       // Generate JWT token
       const token = jwt.sign(
-        { userId: user._id.toString() },
+        { userId: user.userId },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
       );
@@ -149,7 +148,7 @@ router.post('/login',
         message: 'Login successful',
         token,
         user: {
-          id: user._id,
+          id: user.userId,
           email: user.email,
           name: user.name
         }
@@ -205,7 +204,7 @@ router.get('/me', authenticate, async (req, res) => {
     res.json({
       success: true,
       user: {
-        id: user._id,
+        id: user.userId,
         email: user.email,
         name: user.name,
         bio: user.bio,
@@ -371,7 +370,7 @@ router.put('/profile', authenticate, async (req, res) => {
       success: true,
       message: 'Profile updated successfully',
       user: {
-        id: updatedUser._id,
+        id: updatedUser.userId,
         email: updatedUser.email,
         name: updatedUser.name,
         bio: updatedUser.bio,
@@ -414,10 +413,10 @@ router.get('/users', authenticate, async (req, res) => {
       });
     }
 
-    const users = await User.collection().find({}).toArray();
+    const users = await User.findAll();
 
     const usersData = users.map(user => ({
-      id: user._id,
+      id: user.userId,
       email: user.email,
       name: user.name,
       picture: user.picture,
@@ -475,15 +474,10 @@ router.get('/users/list', authenticate, async (req, res) => {
       ];
     }
 
-    const total = await User.collection().countDocuments(filter);
-    const users = await User.collection()
-      .find(filter)
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const { users, total } = await User.search(search, limit, skip);
 
     const usersData = users.map(u => ({
-      _id: u._id,
+      _id: u.userId,
       email: u.email,
       name: u.name,
       picture: u.picture,
@@ -535,7 +529,7 @@ router.put('/users/:userId', authenticate, async (req, res) => {
       success: true,
       message: 'User updated successfully',
       user: {
-        id: updatedUser._id,
+        id: updatedUser.userId,
         email: updatedUser.email,
         name: updatedUser.name,
         roles: updatedUser.roles,
@@ -581,25 +575,20 @@ router.delete('/user/:userId', authenticate, async (req, res) => {
       });
     }
 
-    // Remove user from all committees
+    // Remove user from all committees they belong to
     const Committee = require('../models/Committee');
-    const { getDB } = require('../config/database');
-    const db = getDB();
-    
-    await db.collection('committees').updateMany(
-      { 'members.userId': new ObjectId(userId) },
-      { $pull: { members: { userId: new ObjectId(userId) } } }
-    );
-
-    // Delete user's votes
-    await db.collection('votes').deleteMany({ userId: new ObjectId(userId) });
-
-    // Delete user's comments
-    await db.collection('comments').deleteMany({ author: new ObjectId(userId) });
-
-    // Delete user's notifications
+    const Vote = require('../models/Vote');
     const Notification = require('../models/Notification');
-    await Notification.collection().deleteMany({ userId: new ObjectId(userId) });
+
+    try {
+      const allCommittees = await Committee.findAll();
+      await Promise.all(allCommittees.map(async c => {
+        const isMember = (c.members || []).some(m => String(m.userId) === userId);
+        if (isMember) await Committee.removeMember(c.committeeId, userId);
+      }));
+    } catch (e) {
+      console.warn('Failed to remove user from committees:', e);
+    }
 
     // Delete the user
     await User.deleteById(userId);
