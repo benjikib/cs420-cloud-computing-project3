@@ -37,13 +37,10 @@ function CommitteesPage() {
                 const all = data.committees || []
 
                 // If user is admin (super-admin or org-admin), show all. Otherwise, only show committees where the user is a member/owner/chair.
-                const isSuperAdmin = user?.roles?.includes('super-admin');
-                const isOrgAdmin = user?.organizationRole === 'admin';
-                
-                if (user && (isSuperAdmin || isOrgAdmin)) {
+                if (user && isAdmin(user)) {
                     setCommittees(all)
                 } else if (user) {
-                    const uid = String(user.id || user._id || user._id)
+                    const uid = String(user.id || user.userId)
                     const visible = all.filter(c => {
                         // committee.members may be an array of primitive ids or objects with userId/_id.
                         if (Array.isArray(c.members) && c.members.length > 0) {

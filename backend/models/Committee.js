@@ -70,7 +70,6 @@ class Committee {
       FilterExpression: '#slug = :slug',
       ExpressionAttributeNames: { '#slug': 'slug' },
       ExpressionAttributeValues: { ':slug': slug },
-      Limit: 1,
     }));
     return result.Items?.[0] || null;
   }
