@@ -1,6 +1,10 @@
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 
-let client;
+// ── MongoDB ──────────────────────────────────────────────────────────────────
+
+let mongoClient;
 let db;
 
 async function connectDB() {
@@ -9,7 +13,7 @@ async function connectDB() {
     throw new Error('MONGODB_URI environment variable is not set');
   }
 
-  client = new MongoClient(uri, {
+  mongoClient = new MongoClient(uri, {
     serverApi: {
       version: ServerApiVersion.v1,
       strict: true,
@@ -23,10 +27,10 @@ async function connectDB() {
   });
 
   try {
-    await client.connect();
-    await client.db('admin').command({ ping: 1 });
+    await mongoClient.connect();
+    await mongoClient.db('admin').command({ ping: 1 });
     console.log('Connected to MongoDB');
-    db = client.db('commie');
+    db = mongoClient.db('commie');
     return db;
   } catch (error) {
     console.error('MongoDB connection error:', error.message);
@@ -41,4 +45,34 @@ function getDB() {
   return db;
 }
 
-module.exports = { connectDB, getDB, get client() { return client; } };
+// ── DynamoDB ─────────────────────────────────────────────────────────────────
+
+const isLocal = process.env.DYNAMODB_LOCAL === 'true';
+
+const dynamoClient = new DynamoDBClient(
+  isLocal
+    ? {
+        region: 'us-east-1', // required but ignored by local
+        endpoint: 'http://localhost:8000',
+        credentials: { accessKeyId: 'local', secretAccessKey: 'local' },
+      }
+    : {
+        region: process.env.AWS_REGION || 'us-east-1',
+        // On EC2 with an instance role, no credentials needed here
+      }
+);
+
+const dynamo = DynamoDBDocumentClient.from(dynamoClient, {
+  marshallOptions: { removeUndefinedValues: true },
+});
+
+function getDynamo() {
+  return dynamo;
+}
+
+module.exports = {
+  connectDB,
+  getDB,
+  getDynamo,
+  get client() { return mongoClient; },
+};

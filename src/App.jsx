@@ -14,9 +14,6 @@ import CreateCommitteePage from './components/CreateCommitteePage.jsx'
 import UserControlPage from './components/UserControlPage.jsx'
 import NotFoundPage from './components/NotFoundPage.jsx'
 import AdminPanel from './components/AdminPanel.jsx'
-import OrganizationPaymentPage from './components/OrganizationPaymentPage.jsx'
-import OrganizationSetupPage from './components/OrganizationSetupPage.jsx'
-import OrganizationDeletedPage from './components/OrganizationDeletedPage.jsx'
 import ProtectedRoute from './components/ProtectedRoute.jsx'
 import ScrollToTop from './components/ScrollToTop.jsx'
 import { BrowserRouter, Routes, Route, useLocation } from "react-router-dom";
@@ -35,9 +32,6 @@ export default function App() {
       <Routes location={background || location}>
         <Route path="/" element={<LoginPage />}></Route>
         <Route path="/login" element={<LoginPage />}></Route>
-        <Route path="/organization-deleted" element={<ProtectedRoute><OrganizationDeletedPage /></ProtectedRoute>}></Route>
-        <Route path="/organization/payment" element={<ProtectedRoute><OrganizationPaymentPage /></ProtectedRoute>}></Route>
-        <Route path="/organization/:organizationId/setup" element={<ProtectedRoute><OrganizationSetupPage /></ProtectedRoute>}></Route>
         <Route path="/home" element={<ProtectedRoute><HomePage /></ProtectedRoute>}></Route>
         <Route path="/committees" element={<ProtectedRoute><CommitteesPage /></ProtectedRoute>}></Route>
         <Route path="/create-committee" element={<ProtectedRoute><CreateCommitteePage /></ProtectedRoute>}></Route>

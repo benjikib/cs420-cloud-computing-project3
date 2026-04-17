@@ -14,7 +14,6 @@ const commentRoutes = require('./routes/comments');
 const voteRoutes = require('./routes/votes');
 const notificationsRoutes = require('./routes/notifications');
 const motionControlRoutes = require('./routes/motionControl');
-const organizationRoutes = require('./routes/organizations');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -59,7 +58,6 @@ app.use('/', commentRoutes);
 app.use('/', voteRoutes);
 app.use('/', notificationsRoutes);
 app.use('/motion-control', motionControlRoutes);
-app.use('/organizations', organizationRoutes);
 
 // 404 handler
 app.use((req, res) => {

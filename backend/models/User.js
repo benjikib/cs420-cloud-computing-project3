@@ -25,16 +25,11 @@ class User {
       phoneNumber: userData.phoneNumber || '',
       address: userData.address || '',
 
-      // Organization info
-      organizationId: userData.organizationId || null, // Reference to Organization
-      organizationRole: userData.organizationRole || null, // 'admin', 'member', or null
-
       // User Settings
       settings: {
         theme: userData.settings?.theme || 'light', // 'light' or 'dark'
         notifications: userData.settings?.notifications !== undefined ? userData.settings.notifications : true,
         displayName: userData.settings?.displayName || userData.name,
-        enabledNotificationOrgs: userData.settings?.enabledNotificationOrgs || [] // Super-admins only: array of org IDs to receive notifications from (empty = none, ['all'] = all orgs)
       },
 
       // Roles and Permissions
@@ -294,10 +289,6 @@ class User {
     if (settings.displayName !== undefined) {
       updateData['settings.displayName'] = settings.displayName;
     }
-    if (settings.enabledNotificationOrgs !== undefined) {
-      updateData['settings.enabledNotificationOrgs'] = settings.enabledNotificationOrgs;
-    }
-
     updateData.updatedAt = new Date();
 
     const result = await this.collection().findOneAndUpdate(

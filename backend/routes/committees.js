@@ -19,27 +19,12 @@ router.get('/committees/my-chairs', authenticate, async (req, res) => {
   try {
     const userId = req.user.userId;
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
-    
+
     let committees;
-    
+
     if (isSuperAdmin) {
-      // Super-admins can access all committees across all organizations
       committees = await Committee.collection().find({}).toArray();
-    } else if (isOrgAdmin) {
-      // Organization admins can access all committees in their organization
-      const user = await User.findById(userId);
-      const organizationId = user?.organizationId;
-      
-      if (organizationId) {
-        committees = await Committee.collection()
-          .find({ organizationId: new ObjectId(organizationId) })
-          .toArray();
-      } else {
-        committees = [];
-      }
     } else {
-      // Regular users only see committees where they are chair
       committees = await Committee.collection()
         .find({ chair: userId })
         .toArray();
@@ -70,35 +55,13 @@ router.get('/committees/:page', authenticate, async (req, res) => {
     const limit = 10;
     const skip = (page - 1) * limit;
 
-    // Super-admins see all committees, regular users see only their organization
-    const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    
-    let filter = {};
-    if (!isSuperAdmin) {
-      const user = await User.findById(req.user.userId);
-      const organizationId = user?.organizationId;
-      if (organizationId) {
-        filter.organizationId = new ObjectId(organizationId);
-      } else {
-        // User has no organization - return empty result
-        return res.json({
-          success: true,
-          committees: [],
-          page,
-          limit,
-          totalPages: 0,
-          total: 0
-        });
-      }
-    }
-
     const committees = await Committee.collection()
-      .find(filter)
+      .find({})
       .skip(skip)
       .limit(limit)
       .toArray();
 
-    const total = await Committee.collection().countDocuments(filter);
+    const total = await Committee.collection().countDocuments({});
 
     res.json({
       success: true,
@@ -164,11 +127,7 @@ router.get('/committee/:id/potential-members', authenticate, async (req, res) =>
     const limit = parseInt(req.query.limit) || 20;
     const skip = (page - 1) * limit;
 
-    // Users who do not have this committee in their memberCommittees AND are in the same organization
-    const filter = { 
-      memberCommittees: { $ne: committee._id },
-      organizationId: committee.organizationId || null
-    };
+    const filter = { memberCommittees: { $ne: committee._id } };
     const total = await User.collection().countDocuments(filter);
     const users = await User.collection()
       .find(filter)
@@ -341,17 +300,11 @@ router.post('/committee/create',
 
       const { title, description, members, chair } = req.body;
 
-      // Get user's organizationId
-      const user = await User.findById(req.user.userId);
-      const organizationId = user?.organizationId || null;
-
-      // Create committee; members may be an array of ids or objects
       const committee = await Committee.create({
         title,
         description,
         members: members || [],
         chair: chair || null,
-        organizationId: organizationId
       });
 
       // Persist user -> committee relationships for selected members and chair
