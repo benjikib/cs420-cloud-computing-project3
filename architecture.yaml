@@ -45,24 +45,42 @@ Parameters:
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64
     Description: Latest Amazon Linux 2023 AMI (resolved automatically per region)
 
+  ArtifactsBucketName:
+    Type: String
+    Description: >
+      Name of an EXISTING S3 bucket containing the deployment artifacts.
+      Create this bucket manually, upload frontend/app.zip and backend/app.zip
+      to it, then launch this stack. The bucket must be in the same region.
+
   FrontendZipKey:
     Type: String
-    Default: frontend/app.zip
+    Default: frontend/frontend-app.zip
     Description: >
       S3 key of the frontend build artifact (pre-built Vite dist/ directory,
-      zipped so that index.html sits at the root of the archive)
+      zipped so that index.html sits at the root of the archive).
 
   BackendZipKey:
     Type: String
-    Default: backend/app.zip
+    Default: backend/backend-app.zip
     Description: >
       S3 key of the backend artifact (full Express project directory, zipped
-      so that server.js sits at the root of the archive)
+      so that server.js sits at the root of the archive).
+
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    Description: >
+      Name of the existing IAM instance profile to attach to both EC2 instances.
+      In AWS Academy, use "LabInstanceProfile". In a regular AWS account you would
+      create your own role — but Academy does not allow IAM resource creation.
 
   JwtSecret:
     Type: String
     NoEcho: true
-    Description: Secret key used by the backend to sign JWT tokens
+    MinLength: 32
+    Description: >
+      Secret key used by the backend to sign JWT tokens.
+      Must be at least 32 characters. Use a random string — never reuse passwords.
 
 # ==============================================================================
 # RESOURCES
@@ -131,28 +149,6 @@ Resources:
       RouteTableId: !Ref PublicRouteTable
 
   # ----------------------------------------------------------------------------
-  # S3 — Artifact storage bucket for deployment zips
-  # ----------------------------------------------------------------------------
-
-  # Both EC2 instances pull their code from this bucket at boot time.
-  # Upload frontend/app.zip and backend/app.zip here before launching the stack
-  # (or redeploy via SSM after the stack is up).
-  ArtifactsBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub '${AWS::StackName}-artifacts-${AWS::AccountId}'
-      VersioningConfiguration:
-        Status: Enabled
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-
-  # ----------------------------------------------------------------------------
   # SECURITY GROUPS
   # ----------------------------------------------------------------------------
 
@@ -206,111 +202,108 @@ Resources:
           Value: !Sub '${AWS::StackName}-backend-sg'
 
   # ----------------------------------------------------------------------------
-  # IAM — Instance roles: S3 artifact read for both servers; DynamoDB for backend
-  # ----------------------------------------------------------------------------
-
-  # Frontend role: read-only access to the artifacts bucket so it can pull its zip
-  FrontendInstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${AWS::StackName}-frontend-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: S3ArtifactsReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource: !Sub '${ArtifactsBucket.Arn}/*'
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-
-  FrontendInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: !Sub '${AWS::StackName}-frontend-profile'
-      Roles:
-        - !Ref FrontendInstanceRole
-
-  BackendInstanceRole:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub '${AWS::StackName}-backend-role'
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ec2.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: S3ArtifactsReadAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - s3:GetObject
-                Resource: !Sub '${ArtifactsBucket.Arn}/*'
-        - PolicyName: DynamoDBAccess
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  - dynamodb:Query
-                  - dynamodb:Scan
-                  - dynamodb:BatchGetItem
-                  - dynamodb:BatchWriteItem
-                Resource:
-                  - !GetAtt UsersTable.Arn
-                  - !Sub '${UsersTable.Arn}/index/*'
-                  - !GetAtt OrganizationsTable.Arn
-                  - !Sub '${OrganizationsTable.Arn}/index/*'
-                  - !GetAtt CommitteesTable.Arn
-                  - !Sub '${CommitteesTable.Arn}/index/*'
-                  - !GetAtt MotionsTable.Arn
-                  - !Sub '${MotionsTable.Arn}/index/*'
-                  - !GetAtt VotesTable.Arn
-                  - !Sub '${VotesTable.Arn}/index/*'
-                  - !GetAtt CommentsTable.Arn
-                  - !Sub '${CommentsTable.Arn}/index/*'
-                  - !GetAtt NotificationsTable.Arn
-                  - !Sub '${NotificationsTable.Arn}/index/*'
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-
-  BackendInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties:
-      InstanceProfileName: !Sub '${AWS::StackName}-backend-profile'
-      Roles:
-        - !Ref BackendInstanceRole
-
-  # ----------------------------------------------------------------------------
   # EC2 INSTANCES
   # ----------------------------------------------------------------------------
 
-  # Serves the built React/Vite SPA via nginx on port 80/443.
-  # DependsOn BackendInstance so CloudFormation can resolve its private IP for
-  # the nginx proxy block before this instance's UserData is rendered.
+  # Runs the Express.js API on port 3001. Must be created first so CloudFormation
+  # can resolve BackendInstance.PrivateIp for the frontend nginx config.
+  BackendInstance:
+    Type: AWS::EC2::Instance
+    # CloudFormation waits up to 10 minutes for cfn-signal before marking CREATE_COMPLETE.
+    # This ensures the stack only succeeds when the backend is actually running.
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT20M
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAMI
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref BackendSecurityGroup
+      IamInstanceProfile: !Ref InstanceProfileName
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-backend'
+        - Key: Role
+          Value: backend
+        - Key: Environment
+          Value: !Ref Environment
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+
+          # Install cfn-bootstrap so we can signal CloudFormation when done
+          dnf install -y aws-cfn-bootstrap
+
+          # Helper: signal CloudFormation with success or failure and exit
+          cfn_signal() {
+            /opt/aws/bin/cfn-signal -e "$1" \
+              --stack  ${AWS::StackName} \
+              --region ${AWS::Region} \
+              --resource BackendInstance
+          }
+          trap 'cfn_signal 1' ERR
+
+          # ---- Install Node.js 20 via the official NodeSource stream ----
+          dnf install -y nodejs npm unzip
+
+          # Verify Node version
+          node --version
+
+          # ---- Install PM2 for process management ----
+          npm install -g pm2
+
+          # ---- Pull the backend artifact from S3 ----
+          # aws CLI is pre-installed on Amazon Linux 2023
+          mkdir -p /opt/commie
+          aws s3 cp s3://${ArtifactsBucketName}/${BackendZipKey} /tmp/backend.zip
+          unzip -o /tmp/backend.zip -d /opt/commie
+
+          # ---- Write runtime environment variables ----
+          # Static values — single-quoted heredoc, no bash/CF substitution
+          cat > /opt/commie/.env << 'ENVFILE'
+          NODE_ENV=production
+          PORT=3001
+          JWT_EXPIRES_IN=7d
+          ENVFILE
+
+          # CloudFormation-resolved values — unquoted heredoc
+          cat >> /opt/commie/.env << ENVVARS
+          JWT_SECRET=${JwtSecret}
+          AWS_REGION=${AWS::Region}
+          DYNAMODB_USERS_TABLE=${AWS::StackName}-users
+          DYNAMODB_ORGANIZATIONS_TABLE=${AWS::StackName}-organizations
+          DYNAMODB_COMMITTEES_TABLE=${AWS::StackName}-committees
+          DYNAMODB_MOTIONS_TABLE=${AWS::StackName}-motions
+          DYNAMODB_VOTES_TABLE=${AWS::StackName}-votes
+          DYNAMODB_COMMENTS_TABLE=${AWS::StackName}-comments
+          DYNAMODB_NOTIFICATIONS_TABLE=${AWS::StackName}-notifications
+          ENVVARS
+
+          # ---- Install dependencies and start the server ----
+          cd /opt/commie
+          npm install --omit=dev
+
+          pm2 start server.js --name commie-backend
+          # Register PM2 as a systemd service so it survives reboots.
+          # When running as root, pm2 startup configures the service directly.
+          pm2 startup systemd -u root --hp /root
+          pm2 save
+
+          # ---- Signal success ----
+          cfn_signal 0
+
+  # Serves the pre-built React/Vite SPA via nginx.
+  # DependsOn BackendInstance so CloudFormation can resolve its private IP
+  # before this instance's UserData is rendered by !Sub.
   FrontendInstance:
     Type: AWS::EC2::Instance
     DependsOn: BackendInstance
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT20M
     Properties:
       InstanceType: !Ref InstanceType
       ImageId: !Ref LatestAMI
@@ -318,7 +311,7 @@ Resources:
       SubnetId: !Ref PublicSubnet
       SecurityGroupIds:
         - !Ref FrontendSecurityGroup
-      IamInstanceProfile: !Ref FrontendInstanceProfile
+      IamInstanceProfile: !Ref InstanceProfileName
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-frontend'
@@ -330,17 +323,29 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euxo pipefail
-          yum update -y
-          yum install -y nginx unzip aws-cli
+
+          # Install cfn-bootstrap
+          dnf install -y aws-cfn-bootstrap
+
+          cfn_signal() {
+            /opt/aws/bin/cfn-signal -e "$1" \
+              --stack  ${AWS::StackName} \
+              --region ${AWS::Region} \
+              --resource FrontendInstance
+          }
+          trap 'cfn_signal 1' ERR
+
+          # ---- Install nginx ----
+          dnf install -y nginx unzip
 
           # ---- Pull the pre-built frontend artifact from S3 ----
           mkdir -p /var/www/commie
-          aws s3 cp s3://${ArtifactsBucket}/${FrontendZipKey} /tmp/frontend.zip
+          aws s3 cp s3://${ArtifactsBucketName}/${FrontendZipKey} /tmp/frontend.zip
           unzip -o /tmp/frontend.zip -d /var/www/commie
 
           # ---- Write nginx config ----
-          # Note: nginx variables are written as ${!var} so that CloudFormation's
-          # !Sub leaves them as ${var}, which nginx treats identically to $var.
+          # Nginx variables use ${!var} syntax — the ! tells CloudFormation !Sub
+          # to leave them alone, so nginx sees them as its own $var references.
           cat > /etc/nginx/conf.d/commie.conf << 'NGINXCONF'
           server {
               listen 80;
@@ -360,6 +365,7 @@ Resources:
                   proxy_set_header Host ${!host};
                   proxy_set_header X-Real-IP ${!remote_addr};
                   proxy_set_header X-Forwarded-For ${!proxy_add_x_forwarded_for};
+                  proxy_read_timeout 60s;
               }
           }
           NGINXCONF
@@ -374,84 +380,29 @@ Resources:
           systemctl enable nginx
           systemctl start nginx
 
-  # Runs the Express.js API on port 3001; accesses DynamoDB via the instance role.
-  # The IAM role eliminates the need for any hardcoded AWS credentials.
-  BackendInstance:
-    Type: AWS::EC2::Instance
-    Properties:
-      InstanceType: !Ref InstanceType
-      ImageId: !Ref LatestAMI
-      KeyName: !Ref KeyPairName
-      SubnetId: !Ref PublicSubnet
-      SecurityGroupIds:
-        - !Ref BackendSecurityGroup
-      IamInstanceProfile: !Ref BackendInstanceProfile
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-backend'
-        - Key: Role
-          Value: backend
-        - Key: Environment
-          Value: !Ref Environment
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash
-          set -euxo pipefail
-          yum update -y
-          yum install -y nodejs npm unzip aws-cli
+          # Verify nginx started cleanly before signaling success
+          systemctl is-active --quiet nginx
 
-          # ---- Install PM2 for process management ----
-          npm install -g pm2
-
-          # ---- Pull the backend artifact from S3 ----
-          mkdir -p /opt/commie
-          aws s3 cp s3://${ArtifactsBucket}/${BackendZipKey} /tmp/backend.zip
-          unzip -o /tmp/backend.zip -d /opt/commie
-
-          # ---- Write runtime environment variables ----
-          # The backend reads these via dotenv. AWS credentials are NOT needed
-          # here because the instance role handles DynamoDB auth automatically.
-          cat > /opt/commie/.env << 'ENVFILE'
-          NODE_ENV=production
-          PORT=3001
-          ENVFILE
-
-          # Append values that come from CloudFormation parameters/attributes
-          cat >> /opt/commie/.env << ENVVARS
-          JWT_SECRET=${JwtSecret}
-          JWT_EXPIRES_IN=7d
-          AWS_REGION=${AWS::Region}
-          DYNAMODB_USERS_TABLE=${AWS::StackName}-users
-          DYNAMODB_ORGANIZATIONS_TABLE=${AWS::StackName}-organizations
-          DYNAMODB_COMMITTEES_TABLE=${AWS::StackName}-committees
-          DYNAMODB_MOTIONS_TABLE=${AWS::StackName}-motions
-          DYNAMODB_VOTES_TABLE=${AWS::StackName}-votes
-          DYNAMODB_COMMENTS_TABLE=${AWS::StackName}-comments
-          DYNAMODB_NOTIFICATIONS_TABLE=${AWS::StackName}-notifications
-          ENVVARS
-
-          # ---- Install dependencies and start the server ----
-          cd /opt/commie
-          npm install --omit=dev
-
-          pm2 start server.js --name commie-backend
-          pm2 startup systemd -u root --hp /root
-          pm2 save
+          # ---- Signal success ----
+          cfn_signal 0
 
   # ----------------------------------------------------------------------------
   # DYNAMODB TABLES
   #
   # Key-design notes:
-  #   - All tables use PAY_PER_REQUEST (on-demand) billing — no capacity planning needed.
-  #   - GSIs mirror the query patterns from the existing MongoDB indexes.
-  #   - VotesTable uses a composite key (motionId HASH + userId RANGE) to enforce
-  #     the one-vote-per-user-per-motion constraint natively, matching the MongoDB
-  #     unique index on {motionId, userId}.
+  #   - PAY_PER_REQUEST (on-demand) billing — no capacity planning needed.
+  #   - DeletionPolicy: Retain — dropping the stack does NOT delete table data.
+  #     To fully clean up, delete tables manually after stack deletion.
+  #   - VotesTable composite key (motionId HASH + userId RANGE) enforces
+  #     one-vote-per-user-per-motion natively.
   # ----------------------------------------------------------------------------
 
-  # PK: userId | GSI: email (unique login lookup)
+  # PK: userId
+  # GSI: email-index (login lookup without Scan)
   UsersTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-users'
       BillingMode: PAY_PER_REQUEST
@@ -474,9 +425,12 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # PK: organizationId | GSI: slug (unique URL lookup), inviteCode (join flow)
+  # PK: organizationId
+  # GSI: slug-index (URL lookup), inviteCode-index (join flow)
   OrganizationsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-organizations'
       BillingMode: PAY_PER_REQUEST
@@ -507,9 +461,13 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # PK: committeeId | GSI: organizationId (list all committees in an org)
+  # PK: committeeId
+  # GSI: organizationId-index (list all committees in an org)
+  #      slug-index (URL lookup — eliminates full-table Scan in auth middleware)
   CommitteesTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-committees'
       BillingMode: PAY_PER_REQUEST
@@ -517,6 +475,8 @@ Resources:
         - AttributeName: committeeId
           AttributeType: S
         - AttributeName: organizationId
+          AttributeType: S
+        - AttributeName: slug
           AttributeType: S
       KeySchema:
         - AttributeName: committeeId
@@ -528,13 +488,22 @@ Resources:
               KeyType: HASH
           Projection:
             ProjectionType: ALL
+        - IndexName: slug-index
+          KeySchema:
+            - AttributeName: slug
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
       Tags:
         - Key: Environment
           Value: !Ref Environment
 
-  # PK: motionId | GSI: committeeId (list all motions in a committee)
+  # PK: motionId
+  # GSI: committeeId-index (list all motions in a committee)
   MotionsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-motions'
       BillingMode: PAY_PER_REQUEST
@@ -558,12 +527,12 @@ Resources:
           Value: !Ref Environment
 
   # PK: motionId (HASH) + userId (RANGE)
-  # Composite key enforces one vote per user per motion at the database level.
-  # Query(motionId) fetches all votes for a motion; GetItem(motionId, userId)
-  # checks whether a specific user has already voted.
-  # GSI: userId-index supports "show all votes cast by a user" if needed.
+  # Composite key enforces one vote per user per motion at the DB level.
+  # GSI: userId-index (query all votes cast by a user, e.g. for delete cascade)
   VotesTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-votes'
       BillingMode: PAY_PER_REQUEST
@@ -588,9 +557,12 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # PK: commentId | GSI: motionId (list all comments on a motion)
+  # PK: commentId
+  # GSI: motionId-index (list all comments on a motion)
   CommentsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-comments'
       BillingMode: PAY_PER_REQUEST
@@ -613,9 +585,13 @@ Resources:
         - Key: Environment
           Value: !Ref Environment
 
-  # PK: notificationId | GSI: userId (list all notifications for a user)
+  # PK: notificationId
+  # GSI: userId-index (list notifications by recipient)
+  #      committeeId-index (list notifications for a committee — used in notifications.js GET)
   NotificationsTable:
     Type: AWS::DynamoDB::Table
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       TableName: !Sub '${AWS::StackName}-notifications'
       BillingMode: PAY_PER_REQUEST
@@ -624,6 +600,8 @@ Resources:
           AttributeType: S
         - AttributeName: userId
           AttributeType: S
+        - AttributeName: committeeId
+          AttributeType: S
       KeySchema:
         - AttributeName: notificationId
           KeyType: HASH
@@ -631,6 +609,12 @@ Resources:
         - IndexName: userId-index
           KeySchema:
             - AttributeName: userId
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: committeeId-index
+          KeySchema:
+            - AttributeName: committeeId
               KeyType: HASH
           Projection:
             ProjectionType: ALL
@@ -644,10 +628,18 @@ Resources:
 Outputs:
 
   ArtifactsBucketName:
-    Description: S3 bucket where frontend and backend zip artifacts should be uploaded
-    Value: !Ref ArtifactsBucket
+    Description: >
+      S3 bucket for deployment artifacts. Upload frontend/app.zip and
+      backend/app.zip here before launching (or re-launching) the stack.
+    Value: !Ref ArtifactsBucketName
     Export:
       Name: !Sub '${AWS::StackName}-artifacts-bucket'
+
+  FrontendURL:
+    Description: Public URL of the frontend (open this in a browser)
+    Value: !Sub 'http://${FrontendInstance.PublicDnsName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-frontend-url'
 
   FrontendPublicIP:
     Description: Public IP address of the frontend EC2 instance
