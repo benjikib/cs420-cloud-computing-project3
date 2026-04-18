@@ -1,6 +1,6 @@
 # Deployment Fixes
 
-Issues encountered and resolved during the first EC2 deployment.
+Issues encountered and resolved during EC2 deployment.
 
 ---
 
@@ -36,6 +36,14 @@ nginx's `proxy_pass` behavior depends on whether a URI is present:
 - `proxy_pass http://host:port/;` — replaces the matched location prefix, stripping `/api/`
 
 The backend has no `/api/` prefix on its routes, so the trailing slash is required. It was mistakenly removed during an earlier edit and restored.
+
+## 8. Admin seed — race condition with DynamoDB table creation
+
+CloudFormation creates EC2 instances and DynamoDB tables in parallel by default. The admin seed script ran before the `UsersTable` was active and failed with `ResourceNotFoundException`. Fixed by adding `DependsOn` to `BackendInstance` listing all five tables, so the instance only launches after every table is fully ready.
+
+## 9. Admin seed — `Cannot find module 'dotenv'`
+
+The seed script was written to `/tmp/seed-admin.js` and run with `node /tmp/seed-admin.js`. Node resolves `require()` calls relative to the script's location, so it looked for `node_modules` in `/tmp` instead of `/opt/commie`. Fixed by writing and running the script from `/opt/commie` where `npm install` had placed the dependencies.
 
 ## 7. PM2 process list not persisting across reboots
 
