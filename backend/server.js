@@ -1,9 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '.env') });
 
-const { connectDB } = require('./config/database');
 const { checkAndNotifyVotingDeadlines } = require('./utils/votingDeadlineNotifications');
 
 // Import routes
@@ -29,7 +28,12 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // Allow custom domain from env variable
+    // Allow all origins if CORS_ORIGIN is wildcard
+    if (process.env.CORS_ORIGIN === '*') {
+      return callback(null, true);
+    }
+
+    // Allow specific origin from env variable
     if (process.env.CORS_ORIGIN && origin === process.env.CORS_ORIGIN) {
       return callback(null, true);
     }
@@ -79,8 +83,6 @@ app.use((err, req, res, next) => {
 
 async function startServer() {
   try {
-    await connectDB();
-
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/health`);
