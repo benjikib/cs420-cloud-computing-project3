@@ -303,7 +303,7 @@ Resources:
           npm install --omit=dev
 
           # ---- Seed admin user (idempotent — skips if email already exists) ----
-          cat > /tmp/seed-admin.js << 'SEEDSCRIPT'
+          cat > /opt/commie/seed-admin.js << 'SEEDSCRIPT'
           require('dotenv').config({ path: '/opt/commie/.env' });
           const bcrypt = require('bcryptjs');
           const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
@@ -347,7 +347,8 @@ Resources:
           seed().catch(err => { console.error('Seed failed:', err.message); process.exit(1); });
           SEEDSCRIPT
 
-          ADMIN_EMAIL="${AdminEmail}" ADMIN_PASSWORD="${AdminPassword}" node /tmp/seed-admin.js
+          ADMIN_EMAIL="${AdminEmail}" ADMIN_PASSWORD="${AdminPassword}" node /opt/commie/seed-admin.js
+          rm /opt/commie/seed-admin.js
 
           # ---- Start the server ----
           pm2 start server.js --name commie-backend
