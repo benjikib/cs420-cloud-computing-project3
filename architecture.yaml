@@ -233,6 +233,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euxo pipefail
+          export HOME=/root
 
           # Install cfn-bootstrap so we can signal CloudFormation when done
           dnf install -y aws-cfn-bootstrap
@@ -347,7 +348,8 @@ Resources:
           # to leave them alone, so nginx sees them as its own $var references.
           cat > /etc/nginx/conf.d/commie.conf << 'NGINXCONF'
           server {
-              listen 80;
+              listen 80 default_server;
+              listen [::]:80 default_server;
               server_name _;
               root /var/www/commie;
               index index.html;
@@ -359,7 +361,7 @@ Resources:
 
               # Proxy API calls to the backend Express server
               location /api/ {
-                  proxy_pass http://BACKEND_PRIVATE_IP:3001;
+                  proxy_pass http://BACKEND_PRIVATE_IP:3001/;
                   proxy_http_version 1.1;
                   proxy_set_header Host ${!host};
                   proxy_set_header X-Real-IP ${!remote_addr};
