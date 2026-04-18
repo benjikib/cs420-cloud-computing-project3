@@ -219,7 +219,13 @@ Resources:
   # can resolve BackendInstance.PrivateIp for the frontend nginx config.
   BackendInstance:
     Type: AWS::EC2::Instance
-    # CloudFormation waits up to 10 minutes for cfn-signal before marking CREATE_COMPLETE.
+    DependsOn:
+      - UsersTable
+      - CommitteesTable
+      - VotesTable
+      - CommentsTable
+      - NotificationsTable
+    # CloudFormation waits up to 20 minutes for cfn-signal before marking CREATE_COMPLETE.
     # This ensures the stack only succeeds when the backend is actually running.
     CreationPolicy:
       ResourceSignal:
