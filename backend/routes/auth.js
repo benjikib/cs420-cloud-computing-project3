@@ -95,13 +95,9 @@ router.post('/login',
   ],
   async (req, res) => {
     try {
-      console.log('Login request body:', req.body);
-      console.log('Login request headers:', req.headers);
-
       // Validate input
       const errors = validationResult(req);
       if (!errors.isEmpty()) {
-        console.log('Validation errors:', errors.array());
         return res.status(400).json({
           success: false,
           errors: errors.array()

@@ -30,7 +30,7 @@ export default function App() {
     <>
       <ScrollToTop />
       <Routes location={background || location}>
-        <Route path="/" element={<LoginPage />}></Route>
+        <Route path="/" element={<ProtectedRoute><HomePage /></ProtectedRoute>}></Route>
         <Route path="/login" element={<LoginPage />}></Route>
         <Route path="/home" element={<ProtectedRoute><HomePage /></ProtectedRoute>}></Route>
         <Route path="/committees" element={<ProtectedRoute><CommitteesPage /></ProtectedRoute>}></Route>

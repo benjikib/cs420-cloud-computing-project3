@@ -30,7 +30,7 @@ function LoginPage() {
             })
             .then(response => {
                 if (response.ok) {
-                    navigate('/committees');
+                    navigate('/home');
                 } else {
                     // Token is invalid, clear it
                     localStorage.removeItem('token');
@@ -87,7 +87,7 @@ function LoginPage() {
             localStorage.setItem('user', JSON.stringify(data.user));
 
             await refetchSettings();
-            navigate('/committees');
+            navigate('/home');
         } catch (err) {
             setError(err.message);
         } finally {
