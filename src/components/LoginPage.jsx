@@ -123,7 +123,7 @@ function LoginPage() {
                 <div className="login-container">
                     <div className="login-card">
                         <h3 className="login-title">
-                            Join YOUR Community
+                            Welcome to Commie
                         </h3>
 
                         {/* Tabs */}

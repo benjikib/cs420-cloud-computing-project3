@@ -1,7 +1,10 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+// Production: .env sits alongside server.js in /opt/commie
+// Development: .env sits one level up at the project root
 require('dotenv').config({ path: path.resolve(__dirname, '.env') });
+require('dotenv').config({ path: path.resolve(__dirname, '../.env') });
 
 const { checkAndNotifyVotingDeadlines } = require('./utils/votingDeadlineNotifications');
 

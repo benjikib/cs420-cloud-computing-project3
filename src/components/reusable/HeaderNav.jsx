@@ -1,32 +1,10 @@
-// const SearchBar = ( {searchedTerm, setSearchedTerm} ) => {
-function SearchBar( {setSearchedTerm} ) {
-        // setSearchedTerm is passed from MotionsPage which puts it into HeaderNav and then we get it here in SearchBar finally
-        // we just set the searchedTerm (prop that searchBar itself doesn't need to see) to whatever is in the input element
-
-        return (
-                <>
-                        <div className="flex items-center border border-black dark:border-gray-600 bg-[#F8FEF9] dark:bg-gray-800 rounded-sm w-100 h-7.5">
-                                <span className="material-symbols-outlined text-black dark:text-gray-300 ml-1">search</span>
-                                <input
-                                        placeholder="Search"
-                                        className="ml-1.5 w-full h-full border-transparent focus:outline-none font-[400] text-xs text-black/60 dark:text-gray-300 bg-transparent placeholder:text-gray-400 dark:placeholder:text-gray-500"
-                                        onChange={ (e) => { setSearchedTerm(e.target.value) } }
-                                        autoComplete="off"
-                                />
-                        </div> 
-                </>
-        )
-
-};
-
 
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { API_BASE_URL } from '../../config/api.js';
 import { getNotifications, handleNotification } from '../../services/notificationApi.js';
 
-// const HeaderNav = ( {searchedTerm, setSearchedTerm} ) => {
-export default function HeaderNav( {setSearchedTerm} ) {
+export default function HeaderNav() {
         const navigate = useNavigate();
         const [user, setUser] = useState(null);
         const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -174,10 +152,7 @@ export default function HeaderNav( {setSearchedTerm} ) {
                                                 <span className="text-lighter-green dark:text-white font-extrabold text-4xl site-name pt-1">Commie</span>
                                                 <img src="/logo.png" alt="Logo" className="w-20 h-20"></img>
                                         </a>
-                                        <div className="ml-16">
-                                                <SearchBar setSearchedTerm = {setSearchedTerm}  />
                                         </div>
-                                </div>
 
                                 {/* The notifs, setting, and profile are grouped on the right */}
                                 <div className="flex items-center gap-6">
@@ -284,14 +259,7 @@ export default function HeaderNav( {setSearchedTerm} ) {
                                         <img src="/logo.png" alt="Logo" className="w-15 h-15"></img>
                                 </a>
                                 
-                                {/* Search bar */}
-                                <div className="w-full">
-                                        <div className="max-w-[180px]">
-                                                <SearchBar setSearchedTerm={setSearchedTerm} />
-                                        </div>
-                                </div>
-
-                                {/* Actions: notifs, settings, profile, logout */}
+                                                {/* Actions: notifs, settings, profile, logout */}
                                 <div className="flex items-center justify-center gap-4">
                                         {isAuthenticated ? (
                                                 <>
