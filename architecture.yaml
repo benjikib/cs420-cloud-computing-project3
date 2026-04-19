@@ -82,6 +82,16 @@ Parameters:
       Secret key used by the backend to sign JWT tokens.
       Must be at least 32 characters. Use a random string — never reuse passwords.
 
+  AdminEmail:
+    Type: String
+    Description: Email address for the automatically created admin account.
+
+  AdminPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: Password for the automatically created admin account.
+
 # ==============================================================================
 # RESOURCES
 # ==============================================================================
@@ -209,7 +219,13 @@ Resources:
   # can resolve BackendInstance.PrivateIp for the frontend nginx config.
   BackendInstance:
     Type: AWS::EC2::Instance
-    # CloudFormation waits up to 10 minutes for cfn-signal before marking CREATE_COMPLETE.
+    DependsOn:
+      - UsersTable
+      - CommitteesTable
+      - VotesTable
+      - CommentsTable
+      - NotificationsTable
+    # CloudFormation waits up to 20 minutes for cfn-signal before marking CREATE_COMPLETE.
     # This ensures the stack only succeeds when the backend is actually running.
     CreationPolicy:
       ResourceSignal:
@@ -233,6 +249,7 @@ Resources:
         Fn::Base64: !Sub |
           #!/bin/bash
           set -euxo pipefail
+          export HOME=/root
 
           # Install cfn-bootstrap so we can signal CloudFormation when done
           dnf install -y aws-cfn-bootstrap
@@ -273,19 +290,67 @@ Resources:
           cat >> /opt/commie/.env << ENVVARS
           JWT_SECRET=${JwtSecret}
           AWS_REGION=${AWS::Region}
+          CORS_ORIGIN=*
           DYNAMODB_USERS_TABLE=${AWS::StackName}-users
-          DYNAMODB_ORGANIZATIONS_TABLE=${AWS::StackName}-organizations
           DYNAMODB_COMMITTEES_TABLE=${AWS::StackName}-committees
-          DYNAMODB_MOTIONS_TABLE=${AWS::StackName}-motions
           DYNAMODB_VOTES_TABLE=${AWS::StackName}-votes
           DYNAMODB_COMMENTS_TABLE=${AWS::StackName}-comments
           DYNAMODB_NOTIFICATIONS_TABLE=${AWS::StackName}-notifications
           ENVVARS
 
-          # ---- Install dependencies and start the server ----
+          # ---- Install dependencies ----
           cd /opt/commie
           npm install --omit=dev
 
+          # ---- Seed admin user (idempotent — skips if email already exists) ----
+          cat > /opt/commie/seed-admin.js << 'SEEDSCRIPT'
+          require('dotenv').config({ path: '/opt/commie/.env' });
+          const bcrypt = require('bcryptjs');
+          const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
+          const { DynamoDBDocumentClient, PutCommand, QueryCommand } = require('@aws-sdk/lib-dynamodb');
+          const { randomUUID } = require('crypto');
+
+          const client = new DynamoDBClient({ region: process.env.AWS_REGION || 'us-east-1' });
+          const dynamo = DynamoDBDocumentClient.from(client, { marshallOptions: { removeUndefinedValues: true } });
+          const TABLE = process.env.DYNAMODB_USERS_TABLE || 'commie-users';
+
+          async function seed() {
+            const email = process.env.ADMIN_EMAIL;
+            const plainPassword = process.env.ADMIN_PASSWORD;
+            if (!email || !plainPassword) { console.log('No admin credentials provided, skipping.'); return; }
+
+            const existing = await dynamo.send(new QueryCommand({
+              TableName: TABLE,
+              IndexName: 'email-index',
+              KeyConditionExpression: 'email = :email',
+              ExpressionAttributeValues: { ':email': email },
+              Limit: 1,
+            }));
+            if (existing.Items && existing.Items.length > 0) { console.log('Admin already exists, skipping.'); return; }
+
+            const now = new Date().toISOString();
+            const password = await bcrypt.hash(plainPassword, 10);
+            await dynamo.send(new PutCommand({
+              TableName: TABLE,
+              Item: {
+                userId: randomUUID(), email, password, name: 'Admin', emailVerified: true,
+                roles: ['admin', 'user'], permissions: [],
+                settings: { theme: 'light', notifications: true, displayName: 'Admin' },
+                ownedCommittees: [], chairedCommittees: [], memberCommittees: [],
+                guestCommittees: [], authoredMotions: [],
+                createdAt: now, updatedAt: now,
+              },
+              ConditionExpression: 'attribute_not_exists(userId)',
+            }));
+            console.log('Admin user created:', email);
+          }
+          seed().catch(err => { console.error('Seed failed:', err.message); process.exit(1); });
+          SEEDSCRIPT
+
+          ADMIN_EMAIL="${AdminEmail}" ADMIN_PASSWORD="${AdminPassword}" node /opt/commie/seed-admin.js
+          rm /opt/commie/seed-admin.js
+
+          # ---- Start the server ----
           pm2 start server.js --name commie-backend
           # Register PM2 as a systemd service so it survives reboots.
           # When running as root, pm2 startup configures the service directly.
@@ -348,7 +413,8 @@ Resources:
           # to leave them alone, so nginx sees them as its own $var references.
           cat > /etc/nginx/conf.d/commie.conf << 'NGINXCONF'
           server {
-              listen 80;
+              listen 80 default_server;
+              listen [::]:80 default_server;
               server_name _;
               root /var/www/commie;
               index index.html;

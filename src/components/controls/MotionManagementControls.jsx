@@ -44,7 +44,7 @@ function MotionManagementControls({ settings, updateSetting, committeeId }) {
         if (!editingMotion) return;
         try {
             setIsSaving(true);
-            await updateMotion(committeeId, editingMotion._id, editForm);
+            await updateMotion(committeeId, editingMotion.motionId || editingMotion.id, editForm);
             await fetchMotions();
             setEditingMotion(null);
             alert('Motion updated successfully!');
@@ -61,7 +61,7 @@ function MotionManagementControls({ settings, updateSetting, committeeId }) {
             return;
         }
         try {
-            await updateMotion(committeeId, motion._id, { 
+            await updateMotion(committeeId, motion.motionId || motion.id, {
                 status: 'voided',
                 votingStatus: 'closed',
                 votingClosedAt: new Date().toISOString()
@@ -157,7 +157,7 @@ function MotionManagementControls({ settings, updateSetting, committeeId }) {
                     <div className="space-y-3">
                         {displayMotions.map((motion) => (
                             <div 
-                                key={motion._id || motion.id}
+                                key={motion.motionId || motion.id}
                                 className="p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg"
                             >
                                 <div className="flex items-start justify-between mb-3">

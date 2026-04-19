@@ -57,7 +57,7 @@ function CommitteeSettingsPage() {
             // Prefer role-aware field from server (committeeRole property set by endpoint)
             if (member.committeeRole) return member.committeeRole === 'guest';
             const gc = member.guestCommittees || member.guest || [];
-            const cid = String((committee && (committee._id || committee.id)) || id);
+            const cid = String((committee && (committee.committeeId || committee.id)) || id);
             if (!Array.isArray(gc)) return false;
             return gc.map(String).includes(cid);
         } catch (e) {

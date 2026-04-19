@@ -72,10 +72,10 @@ export default function ActiveMotionsPanel() {
                         // console.log(`Active motions in ${committee.title}:`, activeMotionsInCommittee);
                         
                         return activeMotionsInCommittee.map(motion => ({
-                                id: motion._id || motion.id,
+                                id: motion.motionId || motion.id,
                                 title: motion.title,
                                 committeeName: committee.title,
-                                committeeSlug: committee.slug || committee._id,
+                                committeeSlug: committee.slug || committee.committeeId,
                                 status: motion.votingStatus === 'open' || motion.votingStatus === 'pending' ? 'Voting Open' : 
                                        motion.votingStatus === 'closed' ? 'Voting Closed' : 
                                        'In Discussion',

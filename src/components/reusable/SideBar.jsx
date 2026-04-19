@@ -25,10 +25,9 @@ export default function SideBar() {
                   if (response && response.success) {
                       const user = response.user || {};
                       const hasChairRole = hasRole(user, 'chair');
-                      const hasAdminRole = isAdmin(user); // Use isAdmin function for super-admin/admin/org-admin check
+                      const hasAdminRole = isAdmin(user);
                       const isSuperAdmin = hasRole(user, 'super-admin');
-                      const isOrgAdmin = user.organizationRole === 'admin';
-                      
+
                       setUserIsAdmin(hasAdminRole);
 
                       // determine committee context (may change when location changes)
@@ -40,7 +39,7 @@ export default function SideBar() {
                               const committee = await getCommitteeById(committeeId);
                               const myRole = committee && committee.myRole ? committee.myRole : null;
                               // Super-admins and org-admins can act as chairs for all committees
-                              setUserIsChair(hasChairRole || myRole === 'chair' || myRole === 'owner' || isSuperAdmin || isOrgAdmin);
+                              setUserIsChair(hasChairRole || myRole === 'chair' || myRole === 'owner' || isSuperAdmin);
                               setUserIsOwner(myRole === 'owner');
                               setUserIsMember(myRole === 'member' || myRole === 'chair' || myRole === 'owner');
                               setUserIsGuest(myRole === 'guest');
@@ -48,14 +47,13 @@ export default function SideBar() {
                               // fallback to checking user arrays if committee lookup fails
                               setUserIsMember(committeeId && Array.isArray(user.memberCommittees) ? user.memberCommittees.map(String).includes(String(committeeId)) : false);
                               setUserIsGuest(committeeId && Array.isArray(user.guestCommittees) ? user.guestCommittees.map(String).includes(String(committeeId)) : false);
-                              setUserIsChair(hasChairRole || isSuperAdmin || isOrgAdmin);
+                              setUserIsChair(hasChairRole || isSuperAdmin);
                               setUserIsOwner(committeeId && Array.isArray(user.ownedCommittees) ? user.ownedCommittees.map(String).includes(String(committeeId)) : false);
                           }
                       } else {
-                          // Not viewing a specific committee - super-admins and org-admins have chair access globally
                           setUserIsMember(false);
                           setUserIsGuest(false);
-                          setUserIsChair(hasChairRole || isSuperAdmin || isOrgAdmin);
+                          setUserIsChair(hasChairRole || isSuperAdmin);
                           setUserIsOwner(false);
                       }
 

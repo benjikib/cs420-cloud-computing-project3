@@ -2,10 +2,8 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { body, validationResult } = require('express-validator');
-const { ObjectId } = require('mongodb');
 const User = require('../models/User');
-const Organization = require('../models/Organization');
-const { authenticate, requireRole } = require('../middleware/auth');
+const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -31,7 +29,7 @@ router.post('/register',
         });
       }
 
-      const { email, password, name, communityCode, isAdmin, organizationInviteCode } = req.body;
+      const { email, password, name, communityCode } = req.body;
 
       // Check if user already exists
       const existingUser = await User.findByEmail(email);
@@ -42,14 +40,6 @@ router.post('/register',
         });
       }
 
-      // If not an admin, require organization invite code
-      if (!isAdmin && !organizationInviteCode) {
-        return res.status(400).json({
-          success: false,
-          message: 'Organization invite code is required to sign up'
-        });
-      }
-
       // Hash password
       const salt = await bcrypt.genSalt(10);
       const hashedPassword = await bcrypt.hash(password, salt);
@@ -57,43 +47,18 @@ router.post('/register',
       // Generate profile picture URL using DiceBear API
       const profilePictureUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=54966D&textColor=ffffff`;
 
-      let organization = null;
-      let organizationId = null;
-      let organizationRole = null;
-
-      // If user provided an invite code, verify and join organization
-      if (organizationInviteCode && !isAdmin) {
-        organization = await Organization.findByInviteCode(organizationInviteCode);
-        if (!organization) {
-          return res.status(400).json({
-            success: false,
-            message: 'Invalid organization invite code'
-          });
-        }
-        organizationId = organization._id;
-        organizationRole = 'member';
-      }
-
-      // Create user (assign default role 'user' or 'guest')
       const user = await User.create({
         email,
         password: hashedPassword,
         name,
         communityCode,
         picture: profilePictureUrl,
-        roles: ['user'], // All users start with 'user' role
-        organizationId,
-        organizationRole
+        roles: ['user'],
       });
-
-      // If joining an organization, add user to organization members
-      if (organization) {
-        await Organization.addMember(organization._id, user._id);
-      }
 
       // Generate JWT token
       const token = jwt.sign(
-        { userId: user._id.toString() },
+        { userId: user.userId },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
       );
@@ -103,13 +68,9 @@ router.post('/register',
         message: 'User registered successfully',
         token,
         user: {
-          id: user._id,
+          id: user.userId,
           email: user.email,
           name: user.name,
-          isAdmin,
-          organizationId,
-          organizationRole,
-          requiresPayment: isAdmin // Frontend will redirect to payment page
         }
       });
     } catch (error) {
@@ -177,7 +138,7 @@ router.post('/login',
 
       // Generate JWT token
       const token = jwt.sign(
-        { userId: user._id.toString() },
+        { userId: user.userId },
         process.env.JWT_SECRET,
         { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
       );
@@ -187,7 +148,7 @@ router.post('/login',
         message: 'Login successful',
         token,
         user: {
-          id: user._id,
+          id: user.userId,
           email: user.email,
           name: user.name
         }
@@ -243,7 +204,7 @@ router.get('/me', authenticate, async (req, res) => {
     res.json({
       success: true,
       user: {
-        id: user._id,
+        id: user.userId,
         email: user.email,
         name: user.name,
         bio: user.bio,
@@ -251,9 +212,7 @@ router.get('/me', authenticate, async (req, res) => {
         address: user.address,
         picture: user.picture,
         communityCode: user.communityCode,
-        organizationId: user.organizationId,
-        organizationRole: user.organizationRole,
-        roles: user.roles || ['guest'],
+        roles: user.roles || ['user'],
         permissions: user.permissions || [],
         settings: user.settings || {
           theme: 'light',
@@ -411,7 +370,7 @@ router.put('/profile', authenticate, async (req, res) => {
       success: true,
       message: 'Profile updated successfully',
       user: {
-        id: updatedUser._id,
+        id: updatedUser.userId,
         email: updatedUser.email,
         name: updatedUser.name,
         bio: updatedUser.bio,
@@ -444,37 +403,24 @@ router.put('/profile', authenticate, async (req, res) => {
  */
 router.get('/users', authenticate, async (req, res) => {
   try {
-    // Check if user is super-admin or org-admin
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
-    
-    if (!isSuperAdmin && !isOrgAdmin) {
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+
+    if (!isSuperAdmin && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin privileges required'
       });
     }
-    
-    let filter = {};
-    if (!isSuperAdmin) {
-      // For org-admins, filter by their organizationId
-      const currentUser = await User.findById(req.user.userId);
-      const organizationId = currentUser?.organizationId;
-      if (organizationId) {
-        filter.organizationId = new ObjectId(organizationId);
-      }
-    }
-    
-    const users = await User.collection().find(filter).toArray();
+
+    const users = await User.findAll();
 
     const usersData = users.map(user => ({
-      id: user._id,
+      id: user.userId,
       email: user.email,
       name: user.name,
       picture: user.picture,
-      organizationId: user.organizationId, // ← Include this for filtering
-      organizationRole: user.organizationRole,
-      roles: user.roles || ['guest'],
+      roles: user.roles || ['user'],
       permissions: user.permissions || [],
       settings: user.settings || {
         theme: 'light',
@@ -504,11 +450,10 @@ router.get('/users', authenticate, async (req, res) => {
  */
 router.get('/users/list', authenticate, async (req, res) => {
   try {
-    // Check if user is super-admin or org-admin
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
-    
-    if (!isSuperAdmin && !isOrgAdmin) {
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+
+    if (!isSuperAdmin && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin privileges required'
@@ -519,15 +464,7 @@ router.get('/users/list', authenticate, async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
 
-    // Use the isSuperAdmin already declared above for filtering
     let filter = {};
-    if (!isSuperAdmin) {
-      const currentUser = await User.findById(req.user.userId);
-      const organizationId = currentUser?.organizationId;
-      if (organizationId) {
-        filter.organizationId = new ObjectId(organizationId);
-      }
-    }
     if (search) {
       const regex = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
       filter.$or = [
@@ -537,15 +474,10 @@ router.get('/users/list', authenticate, async (req, res) => {
       ];
     }
 
-    const total = await User.collection().countDocuments(filter);
-    const users = await User.collection()
-      .find(filter)
-      .skip(skip)
-      .limit(limit)
-      .toArray();
+    const { users, total } = await User.search(search, limit, skip);
 
     const usersData = users.map(u => ({
-      _id: u._id,
+      _id: u.userId,
       email: u.email,
       name: u.name,
       picture: u.picture,
@@ -566,24 +498,22 @@ router.get('/users/list', authenticate, async (req, res) => {
  */
 router.put('/users/:userId', authenticate, async (req, res) => {
   try {
-    // Check if user is super-admin or org-admin
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
-    
-    if (!isSuperAdmin && !isOrgAdmin) {
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
+
+    if (!isSuperAdmin && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Admin privileges required'
       });
     }
-    
-    const { roles, permissions, organizationRole } = req.body;
+
+    const { roles, permissions } = req.body;
     const { userId } = req.params;
 
     const updates = {};
     if (roles !== undefined) updates.roles = roles;
     if (permissions !== undefined) updates.permissions = permissions;
-    if (organizationRole !== undefined) updates.organizationRole = organizationRole;
     updates.updatedAt = new Date();
 
     const updatedUser = await User.updateById(userId, updates);
@@ -599,11 +529,10 @@ router.put('/users/:userId', authenticate, async (req, res) => {
       success: true,
       message: 'User updated successfully',
       user: {
-        id: updatedUser._id,
+        id: updatedUser.userId,
         email: updatedUser.email,
         name: updatedUser.name,
         roles: updatedUser.roles,
-        organizationRole: updatedUser.organizationRole,
         permissions: updatedUser.permissions
       }
     });
@@ -626,12 +555,11 @@ router.delete('/user/:userId', authenticate, async (req, res) => {
     const { userId } = req.params;
     const requestingUserId = req.user.userId;
     
-    // Check if user is deleting their own account or is an admin
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
     const isSelfDelete = String(requestingUserId) === String(userId);
-    
-    if (!isSelfDelete && !isSuperAdmin && !isOrgAdmin) {
+
+    if (!isSelfDelete && !isSuperAdmin && !isAdmin) {
       return res.status(403).json({
         success: false,
         message: 'Not authorized to delete this user'
@@ -647,104 +575,25 @@ router.delete('/user/:userId', authenticate, async (req, res) => {
       });
     }
 
-    // If user is deleting their own account and they own an organization, delete it
-    let deletedOrgStats = null;
-    if (isSelfDelete && user.organizationId && user.organizationRole === 'admin') {
-      const Organization = require('../models/Organization');
-      const organization = await Organization.findById(user.organizationId);
-      
-      if (organization && String(organization.owner) === String(userId)) {
-        console.log(`User ${userId} is organization owner - deleting organization ${organization._id}`);
-        
-        // Delete organization and cascade (committees, motions, votes, comments, notifications)
-        const { getDB } = require('../config/database');
-        const db = getDB();
-        const orgId = new ObjectId(user.organizationId);
-
-        // Get all committees in this organization
-        const committees = await db.collection('committees')
-          .find({ organizationId: orgId })
-          .toArray();
-        
-        const committeeIds = committees.map(c => c._id);
-
-        // Get all motions in these committees
-        const motionIds = [];
-        for (const committee of committees) {
-          if (committee.motions && Array.isArray(committee.motions)) {
-            motionIds.push(...committee.motions.map(m => m._id || m.id));
-          }
-        }
-
-        // Delete cascade
-        if (motionIds.length > 0) {
-          await db.collection('votes').deleteMany({ motionId: { $in: motionIds } });
-          await db.collection('comments').deleteMany({ motionId: { $in: motionIds } });
-        }
-        if (committeeIds.length > 0) {
-          await db.collection('notifications').deleteMany({ committeeId: { $in: committeeIds } });
-        }
-        await db.collection('committees').deleteMany({ organizationId: orgId });
-
-        // Remove organization reference from all users
-        await db.collection('users').updateMany(
-          { organizationId: orgId },
-          { 
-            $unset: { 
-              organizationId: '', 
-              organizationRole: '' 
-            }
-          }
-        );
-
-        // Delete the organization
-        await Organization.deleteById(user.organizationId);
-
-        deletedOrgStats = {
-          organizationId: String(organization._id),
-          organizationName: organization.name,
-          committees: committeeIds.length,
-          motions: motionIds.length
-        };
-
-        console.log(`Deleted organization: ${organization.name} (${deletedOrgStats.committees} committees, ${deletedOrgStats.motions} motions)`);
-      }
-    }
-
-    // Remove user from all committees
+    // Remove user from all committees they belong to
     const Committee = require('../models/Committee');
-    const { getDB } = require('../config/database');
-    const db = getDB();
-    
-    await db.collection('committees').updateMany(
-      { 'members.userId': new ObjectId(userId) },
-      { $pull: { members: { userId: new ObjectId(userId) } } }
-    );
-
-    // Delete user's votes
-    await db.collection('votes').deleteMany({ userId: new ObjectId(userId) });
-
-    // Delete user's comments
-    await db.collection('comments').deleteMany({ author: new ObjectId(userId) });
-
-    // Delete user's notifications
+    const Vote = require('../models/Vote');
     const Notification = require('../models/Notification');
-    await Notification.collection().deleteMany({ userId: new ObjectId(userId) });
+
+    try {
+      const allCommittees = await Committee.findAll();
+      await Promise.all(allCommittees.map(async c => {
+        const isMember = (c.members || []).some(m => String(m.userId) === userId);
+        if (isMember) await Committee.removeMember(c.committeeId, userId);
+      }));
+    } catch (e) {
+      console.warn('Failed to remove user from committees:', e);
+    }
 
     // Delete the user
     await User.deleteById(userId);
 
-    const response = {
-      success: true,
-      message: 'User account deleted successfully'
-    };
-
-    if (deletedOrgStats) {
-      response.organizationDeleted = true;
-      response.organizationStats = deletedOrgStats;
-    }
-
-    res.json(response);
+    res.json({ success: true, message: 'User account deleted successfully' });
   } catch (error) {
     console.error('Delete user error:', error);
     res.status(500).json({

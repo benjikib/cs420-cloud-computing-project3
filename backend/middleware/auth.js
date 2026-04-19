@@ -58,14 +58,11 @@ async function authenticate(req, res, next) {
       });
     }
 
-    // Attach user to request object with organization data
     req.user = {
-      userId: user._id.toString(),
+      userId: user.userId,
       email: user.email,
       name: user.name,
       roles: user.roles || [],
-      organizationId: user.organizationId ? user.organizationId.toString() : null,
-      organizationRole: user.organizationRole || null
     };
 
     next();
@@ -106,12 +103,10 @@ async function optionalAuth(req, res, next) {
 
       if (user) {
         req.user = {
-          userId: user._id.toString(),
+          userId: user.userId,
           email: user.email,
           name: user.name,
           roles: user.roles || [],
-          organizationId: user.organizationId ? user.organizationId.toString() : null,
-          organizationRole: user.organizationRole || null
         };
       }
     }
@@ -150,8 +145,7 @@ function requirePermissionOrAdmin(permission) {
       // Check if user is any type of admin
       const isSuperAdmin = user.roles && user.roles.includes('super-admin');
       const isAdmin = user.roles && user.roles.includes('admin');
-      const isOrgAdmin = user.organizationRole === 'admin';
-      const hasAdminPriv = isSuperAdmin || isAdmin || isOrgAdmin;
+      const hasAdminPriv = isSuperAdmin || isAdmin;
 
       // Check if user has the specific permission
       const hasPermission = user.permissions && user.permissions.includes(permission);
@@ -255,38 +249,6 @@ function requireSuperAdmin(req, res, next) {
  * Middleware to check if user is an organization admin
  * Organization admins have admin rights within their organization only
  */
-function requireOrgAdmin(req, res, next) {
-  try {
-    if (!req.user || !req.user.userId) {
-      return res.status(401).json({
-        success: false,
-        message: 'Authentication required'
-      });
-    }
-
-    const isOrgAdmin = req.user.organizationRole === 'admin';
-
-    if (isOrgAdmin) {
-      next();
-    } else {
-      return res.status(403).json({
-        success: false,
-        message: 'This action requires organization administrator privileges'
-      });
-    }
-  } catch (error) {
-    console.error('Org admin check error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Error checking organization admin privileges'
-    });
-  }
-}
-
-/**
- * Middleware to check if user is either a super-admin OR an organization admin
- * This is useful for actions that both types of admins should be able to perform
- */
 function requireAnyAdmin(req, res, next) {
   try {
     if (!req.user || !req.user.userId) {
@@ -297,9 +259,9 @@ function requireAnyAdmin(req, res, next) {
     }
 
     const isSuperAdmin = req.user.roles && req.user.roles.includes('super-admin');
-    const isOrgAdmin = req.user.organizationRole === 'admin';
+    const isAdmin = req.user.roles && req.user.roles.includes('admin');
 
-    if (isSuperAdmin || isOrgAdmin) {
+    if (isSuperAdmin || isAdmin) {
       next();
     } else {
       return res.status(403).json({
@@ -328,21 +290,15 @@ function isSuperAdmin(user) {
  * Helper function to check if user is an organization admin
  * Can be used within route handlers
  */
-function isOrgAdmin(user) {
-  return user && user.organizationRole === 'admin';
-}
-
-module.exports = { 
-  authenticate, 
-  optionalAuth, 
-  requirePermissionOrAdmin, 
-  requireRole, 
+module.exports = {
+  authenticate,
+  optionalAuth,
+  requirePermissionOrAdmin,
+  requireRole,
   requireCommitteeChairOrPermission,
   requireSuperAdmin,
-  requireOrgAdmin,
   requireAnyAdmin,
   isSuperAdmin,
-  isOrgAdmin
 };
 
 /**
@@ -365,8 +321,7 @@ function requireCommitteeChairOrPermission(permission) {
       // Check for any admin type (super-admin, admin, or org-admin)
       const isSuperAdmin = user.roles && user.roles.includes('super-admin');
       const isAdmin = user.roles && user.roles.includes('admin');
-      const isOrgAdmin = user.organizationRole === 'admin';
-      const hasAdminPriv = isSuperAdmin || isAdmin || isOrgAdmin;
+      const hasAdminPriv = isSuperAdmin || isAdmin;
       const hasPermission = user.permissions && user.permissions.includes(permission);
 
       if (hasAdminPriv || hasPermission) {
@@ -385,7 +340,7 @@ function requireCommitteeChairOrPermission(permission) {
       }
 
       // If the authenticated user is the committee chair (or owner) according to the committee.members list, allow
-      const myRole = await Committee.getMemberRole(committee._id, req.user.userId);
+      const myRole = await Committee.getMemberRole(committee.committeeId, req.user.userId);
       if (myRole === 'chair' || myRole === 'owner') {
         return next();
       }

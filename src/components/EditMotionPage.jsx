@@ -35,7 +35,7 @@ function EditMotionPage() {
                 }
                 setCurrentUser(user);
                 // Author can edit
-                const isAuthor = motionData.author && (String(motionData.author) === String(user?.id || user?._id || user?._id));
+                const isAuthor = motionData.author && (String(motionData.author) === String(user?.id || user?.userId));
                 const isAdminUser = user && isAdmin(user);
                 setHasAccess(isAuthor || isAdminUser);
             } catch (err) {

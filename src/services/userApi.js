@@ -118,15 +118,7 @@ export function hasPermission(user, permission) {
  * @returns {boolean}
  */
 export function isAdmin(user) {
-    // Check for super-admin role (platform level)
-    if (hasRole(user, 'super-admin')) {
-        return true;
-    }
-    // Check for organization admin role
-    if (user && user.organizationRole === 'admin') {
-        return true;
-    }
-    return false;
+    return hasRole(user, 'super-admin') || hasRole(user, 'admin');
 }
 
 /**

@@ -68,11 +68,11 @@ export default function AnalyticsPanel() {
                 for (const committee of committees) {
                     if (!committee?.motions) continue;
 
-                    const committeeId = String(committee._id || committee.id);
+                    const committeeId = String(committee.committeeId || committee.id);
                     // console.log(`Processing committee ${committee.title} (${committeeId}), motions: ${committee.motions.length}`);
 
                     for (const motion of committee.motions) {
-                        const motionId = String(motion._id || motion.id);
+                        const motionId = String(motion.motionId || motion.id);
                         
                         // Fetch actual votes for this motion
                         let hasUserVoted = false;

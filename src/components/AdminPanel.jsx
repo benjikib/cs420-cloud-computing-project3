@@ -554,7 +554,7 @@ function AdminPanel() {
                                         </thead>
                                         <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                                             {filteredCommittees.map((committee) => (
-                                                <tr key={committee._id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
+                                                <tr key={committee.committeeId || committee.id} className="hover:bg-gray-50 dark:hover:bg-gray-700">
                                                     <td className="px-6 py-4 whitespace-nowrap">
                                                         <div className="text-sm font-medium text-gray-900 dark:text-gray-100">
                                                             {committee.name}
@@ -575,7 +575,7 @@ function AdminPanel() {
                                                     </td>
                                                     <td className="px-6 py-4 whitespace-nowrap text-sm">
                                                         <button
-                                                            onClick={() => navigate(`/committee/${committee.slug || committee._id}`)}
+                                                            onClick={() => navigate(`/committee/${committee.slug || committee.committeeId}`)}
                                                             className="text-lighter-green hover:text-darker-green font-medium"
                                                         >
                                                             View

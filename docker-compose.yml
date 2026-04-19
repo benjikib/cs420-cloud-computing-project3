@@ -14,5 +14,12 @@ services:
       timeout: 5s
       retries: 5
 
+  dynamodb-local:
+    image: amazon/dynamodb-local:latest
+    container_name: commie-dynamodb
+    ports:
+      - "8000:8000"
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-inMemory"]
+
 volumes:
   mongo_data:

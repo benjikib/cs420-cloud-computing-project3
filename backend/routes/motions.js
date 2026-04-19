@@ -1,6 +1,5 @@
 const express = require('express');
 const { body, validationResult } = require('express-validator');
-const { ObjectId } = require('mongodb');
 const Committee = require('../models/Committee');
 const User = require('../models/User');
 const { authenticate, requirePermissionOrAdmin } = require('../middleware/auth');
@@ -31,7 +30,7 @@ router.get('/committee/:id/motions/:page', async (req, res) => {
     // Define subsidiary motion types (per CreateMotionPage list)
     const subsidiaryTypes = ['amend', 'refer_to_committee', 'postpone', 'limit_debate', 'previous_question', 'table'];
     const includeSubsidiaries = req.query.includeSubsidiaries === 'true' || !!targetMotion || (type && subsidiaryTypes.includes(type));
-    let result = await Committee.findMotions(committee._id, page, limit, { includeSubsidiaries, type, status, targetMotion });
+    let result = await Committee.findMotions(committee.committeeId, page, limit, { includeSubsidiaries, type, status, targetMotion });
 
     // Filters handled in Committee.findMotions; result is already paginated and filtered
 
@@ -46,7 +45,7 @@ router.get('/committee/:id/motions/:page', async (req, res) => {
             return {
               ...motion,
               authorInfo: author ? {
-                id: author._id,
+                id: author.userId,
                 name: author.settings?.displayName || author.name,
                 email: author.email,
                 picture: author.picture
@@ -92,7 +91,7 @@ router.get('/committee/:id/motion/:motionId', async (req, res) => {
       });
     }
 
-    const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
 
     if (!motion) {
       return res.status(404).json({
@@ -110,7 +109,7 @@ router.get('/committee/:id/motion/:motionId', async (req, res) => {
         motionWithAuthor = {
           ...motion,
           authorInfo: author ? {
-            id: author._id,
+            id: author.userId,
             name: author.settings?.displayName || author.name,
             email: author.email,
             picture: author.picture
@@ -170,7 +169,7 @@ router.post('/committee/:id/motion/create',
       // Create motion with userId reference
       // Disallow guest users from creating motions in this committee
       try {
-        const role = await Committee.getMemberRole(committee._id, req.user.userId);
+        const role = await Committee.getMemberRole(committee.committeeId, req.user.userId);
         if (role === 'guest') {
           return res.status(403).json({ success: false, message: 'Guest members are not allowed to create motions in this committee' });
         }
@@ -209,7 +208,7 @@ router.post('/committee/:id/motion/create',
         });
       }
 
-      const motion = await Committee.createMotion(committee._id, {
+      const motion = await Committee.createMotion(committee.committeeId, {
         title,
         description,
         fullDescription: fullDescription || description,
@@ -233,7 +232,7 @@ router.post('/committee/:id/motion/create',
             motionWithAuthor = {
               ...motion,
               authorInfo: {
-                id: author._id,
+                id: author.userId,
                 name: author.settings?.displayName || author.name,
                 email: author.email,
                 picture: author.picture
@@ -291,7 +290,7 @@ router.put('/committee/:id/motion/:motionId',
         });
       }
 
-      const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+      const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
 
       if (!motion) {
         return res.status(404).json({
@@ -310,11 +309,10 @@ router.put('/committee/:id/motion/:motionId',
 
       const isSuperAdmin = currentUser && currentUser.roles && currentUser.roles.includes('super-admin');
       const isAdmin = currentUser && currentUser.roles && currentUser.roles.includes('admin');
-      const isOrgAdmin = currentUser && currentUser.organizationRole === 'admin';
-      const hasAdminPriv = isSuperAdmin || isAdmin || isOrgAdmin;
+      const hasAdminPriv = isSuperAdmin || isAdmin;
       const canEditAny = currentUser && currentUser.permissions && currentUser.permissions.includes('edit_any_motion');
       const isAuthor = motion.author && String(motion.author) === String(req.user.userId);
-      const isChair = await Committee.isChair(committee._id, req.user.userId);
+      const isChair = await Committee.isChair(committee.committeeId, req.user.userId);
 
       if (!hasAdminPriv && !canEditAny && !isAuthor && !isChair) {
         return res.status(403).json({ success: false, message: 'You are not authorized to edit this motion' });
@@ -336,7 +334,7 @@ router.put('/committee/:id/motion/:motionId',
       if (req.body.targetMotionId !== undefined) updates.targetMotionId = req.body.targetMotionId;
       if (req.body.amendTargetMotionId !== undefined) updates.amendTargetMotionId = req.body.amendTargetMotionId;
 
-      const updatedMotion = await Committee.updateMotion(committee._id, req.params.motionId, updates);
+      const updatedMotion = await Committee.updateMotion(committee.committeeId, req.params.motionId, updates);
 
       res.json({
         success: true,
@@ -369,7 +367,7 @@ router.delete('/committee/:id/motion/:motionId', authenticate, async (req, res) 
       });
     }
 
-    const motion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const motion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
 
     if (!motion) {
       return res.status(404).json({
@@ -394,7 +392,7 @@ router.delete('/committee/:id/motion/:motionId', authenticate, async (req, res) 
       return res.status(403).json({ success: false, message: 'You are not authorized to delete this motion' });
     }
 
-    await Committee.deleteMotion(committee._id, req.params.motionId);
+    await Committee.deleteMotion(committee.committeeId, req.params.motionId);
 
     res.json({
       success: true,
@@ -426,7 +424,7 @@ router.get('/committee/:id/motion/:motionId/subsidiaries', async (req, res) => {
     }
 
     // Verify target motion exists
-    const targetMotion = await Committee.findMotionById(committee._id, req.params.motionId);
+    const targetMotion = await Committee.findMotionById(committee.committeeId, req.params.motionId);
     if (!targetMotion) {
       return res.status(404).json({
         success: false,
@@ -435,7 +433,7 @@ router.get('/committee/:id/motion/:motionId/subsidiaries', async (req, res) => {
     }
 
     // Find all motions where targetMotionId (or legacy amendTargetMotionId) matches this motion
-    const allMotions = await Committee.findMotions(committee._id, 1, 1000, { includeSubsidiaries: true }); // Get all motions
+    const allMotions = await Committee.findMotions(committee.committeeId, 1, 1000, { includeSubsidiaries: true }); // Get all motions
     const subsidiaryMotions = allMotions.motions.filter(m => {
       const targetId = m.targetMotionId || m.amendTargetMotionId;
       return targetId && targetId.toString && targetId.toString() === req.params.motionId.toString();
@@ -452,7 +450,7 @@ router.get('/committee/:id/motion/:motionId/subsidiaries', async (req, res) => {
             return {
               ...motion,
               authorInfo: author ? {
-                id: author._id,
+                id: author.userId,
                 name: author.settings?.displayName || author.name,
                 email: author.email,
                 picture: author.picture
@@ -470,7 +468,7 @@ router.get('/committee/:id/motion/:motionId/subsidiaries', async (req, res) => {
     res.json({
       success: true,
       targetMotion: {
-        id: targetMotion._id,
+        id: targetMotion.motionId,
         title: targetMotion.title
       },
       subsidiaryMotions: motionsWithAuthors,

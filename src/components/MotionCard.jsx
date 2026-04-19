@@ -7,7 +7,7 @@ function MotionCard({ motion, committeeSlug }) {
     const handleClick = () => {
         // Use the API-compliant route structure with slug if available
         const committeeIdentifier = committeeSlug || motion.committeeId;
-        navigate(`/committee/${committeeIdentifier}/motion/${motion._id}`, { state: { background: location } })
+        navigate(`/committee/${committeeIdentifier}/motion/${motion.motionId || motion.id}`, { state: { background: location } })
     }
 
     // Determine status badge styling
